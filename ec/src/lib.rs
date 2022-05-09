@@ -13,6 +13,8 @@ extern crate derivative;
 #[macro_use]
 extern crate ark_std;
 
+extern crate std;
+
 use crate::group::Group;
 use ark_ff::{
     bytes::{FromBytes, ToBytes},
