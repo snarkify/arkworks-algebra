@@ -6,6 +6,7 @@ use crate::{bls12::G1Projective, AffineCurve, ProjectiveCurve};
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+use crate::bn::G1Affine;
 
 pub struct VariableBaseMSM;
 
@@ -69,7 +70,7 @@ impl VariableBaseMSM {
             .map(|bk| Self::pre_calculate::<G>(&bk, &gs))
             .collect();
 
-        let mut Gs: Vec<_> = ark_std::cfg_into_iter!(0..es[0].len())
+        let Gs: Vec<_> = ark_std::cfg_into_iter!(0..es[0].len())
             .map(|k| {
                 let res = buckets.clone().into_iter().zip(&cache).fold(
                     G::Projective::zero(),
@@ -91,6 +92,107 @@ impl VariableBaseMSM {
             .collect();
         Gs
     }
+    pub fn multiexp_affine<G: AffineCurve>(
+        gs: Vec<G::Projective>,
+        es: Vec<Vec<bool>>,
+    ) -> Vec<Vec<G>> {
+        let size = ark_std::cmp::min(gs.len(), es.len());
+        let es = &es[..size];
+        let gs = &gs[..size];
+        let mut b = ark_std::log2(size - ark_std::log2(size) as usize) as usize;
+        b = if b > 0 { b } else { 1 };
+        // println!("hehe, size={}, gs.len={}, es.len={} es[0].len={}, b={}", size,
+        // gs.len(), es.len(),es[0].len(), b);
+        let buckets: Vec<Vec<usize>> = (0..size)
+            .step_by(b)
+            .into_iter()
+            .map(|i| (i..ark_std::cmp::min(i + b, size)).collect())
+            .collect();
+
+        // store the pre calculated hashmap on each bucket
+        let cache: Vec<HashMap<Vec<usize>, G::Projective>> = buckets
+            .clone()
+            .into_iter()
+            .map(|bk| Self::pre_calculate::<G>(&bk, &gs))
+            .collect();
+
+        let Gs: Vec<_> = ark_std::cfg_into_iter!(0..es[0].len())
+            .map(|k| {
+                let pts: Vec<_>= buckets.clone().into_iter().zip(&cache).map(
+                    |(bk, vs)| {
+                        let mut tmp: Vec<_> = Vec::new();
+                        for idx in bk {
+                            if es[idx][k] {
+                                tmp.push(idx);
+                            }
+                        }
+                        let res:G::Projective;
+                            if tmp.len() > 0 {
+                                res = *vs.get(&tmp).unwrap()
+                            } else {
+                                res = G::Projective::zero()
+                            }
+                        res
+                    }).filter(|x|!x.is_zero()).map(|x|x.into_affine()).collect();
+                pts
+            }).collect();
+        Gs
+    }
+
+    pub fn pippenger_batch_affine<G: AffineCurve>(
+        bases: &[G],
+        scalars: &[<G::ScalarField as PrimeField>::BigInt],
+    ) -> (Vec<Vec<G>>,usize) {
+        let mut size = ark_std::cmp::min(bases.len(), scalars.len());
+        let scalars = &scalars[..size];
+        let bases = &bases[..size];
+        let scalars_and_bases: Vec<_> = scalars
+            .iter()
+            .zip(bases)
+            .filter(|(s, _)| !s.is_zero())
+            .collect();
+        size = scalars_and_bases.len();
+        let num_bits = <G::ScalarField as PrimeField>::Params::MODULUS_BITS as usize;
+        let s = Self::sqrt(num_bits / size) + 1;
+        let t = (num_bits as f64 / s as f64).ceil() as usize;
+
+        let gs_bin: Vec<Vec<_>> = ark_std::cfg_into_iter!(scalars_and_bases.clone())
+            .map(|(_, g)| {
+                let mut g0 = G::Projective::zero();
+                let mut v = Vec::new();
+                g0.add_assign_mixed(g);
+                v.push(g0);
+                for _ in 1..s {
+                    let tmp = v[v.len() - 1];
+                    v.push(tmp.double());
+                }
+                v
+            })
+            .collect();
+        let gs: Vec<_> = gs_bin.into_iter().flatten().collect();
+
+        let es_bin: Vec<Vec<Vec<bool>>> = ark_std::cfg_into_iter!(scalars_and_bases)
+            .map(|(scalar, _)| {
+                let mut res: Vec<Vec<bool>> = Vec::new();
+                for _ in 0..s {
+                    let tmp = Vec::new();
+                    res.push(tmp);
+                }
+                let vs = Self::zfill(&scalar.to_bits_le(), s * t);
+                for i in 0..t {
+                    for j in 0..s {
+                        res[j].push(vs[i * s + j]);
+                    }
+                }
+                res
+            })
+            .collect();
+        let es: Vec<_> = es_bin.into_iter().flatten().collect();
+        let Gs: Vec<_> = Self::multiexp_affine::<G>(gs, es);
+        (Gs, s)
+    }
+
+
     pub fn pippenger_mul<G: AffineCurve>(
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
@@ -114,15 +216,13 @@ impl VariableBaseMSM {
                 let mut v = Vec::new();
                 g0.add_assign_mixed(g);
                 v.push(g0);
-                for i in 1..s {
+                for _ in 1..s {
                     let tmp = v[v.len() - 1];
                     v.push(tmp.double());
                 }
                 v
             })
             .collect();
-        // println!("hehe, s={},t={},size={},gs_bin.len={},
-        // gs_bin[0].len={}",s,t,size,gs_bin.len(),gs_bin[0].len());
         let gs: Vec<_> = gs_bin.into_iter().flatten().collect();
 
         let es_bin: Vec<Vec<Vec<bool>>> = ark_std::cfg_into_iter!(scalars_and_bases)

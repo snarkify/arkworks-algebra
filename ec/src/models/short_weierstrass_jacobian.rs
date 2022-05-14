@@ -139,6 +139,68 @@ impl<P: Parameters> GroupAffine<P> {
     pub fn is_in_correct_subgroup_assuming_on_curve(&self) -> bool {
         P::is_in_correct_subgroup_assuming_on_curve(self)
     }
+
+    pub fn batch_affine_pair_addition(left: &[Self], right: &[Self]) -> Vec<Self> {
+        let mut left = left;
+        let mut right = right;
+        if left.len() > right.len() {
+            let tmp = right;
+            right = left;
+            left = tmp;
+        }
+        let l = left.len();
+        let group1: Vec<_>= right[l..right.len()].to_vec();
+        right = &right[0..l];
+        let group2:Vec<_> = left.clone().into_iter().zip(right.clone()).filter(|(p,q)|p.x == q.x).map(|(p,q)|{
+            p.into_projective().add_mixed(q).into_affine()
+        }).collect();
+        let a: Vec<_> = left.clone().into_iter().zip(right.clone()).filter(|(p,q)|p.x!=q.x).map(|(p,q)|{
+            q.x - p.x
+        }).collect();
+        if a.len() == 0 {
+            return group1.into_iter().chain(group2.into_iter()).collect();
+        }
+
+        let mut d: Vec<_> = vec![P::BaseField::one()];
+        let _ :Vec<_>= (0..a.len()-1).zip(&a[0..a.len()-1]).map(|(idx,ai)|{
+            let tmp = d[idx] * ai;
+            d.push(tmp);
+        }).collect();
+        let tmp = d[d.len()-1] * a[a.len()-1];
+        let s = tmp.inverse().unwrap();
+        let mut e: Vec<_> = vec![s];
+        let _: Vec<_> = (1..a.len()).zip(&a[1..a.len()]).rev().map(|(idx,ai)|{
+            let tmp = e[a.len() -1 -idx]* ai;
+            e.push(tmp);
+        }).collect();
+        e = e.into_iter().rev().collect();
+        let r: Vec<_> = d.into_iter().zip(e).map(|(di,ei)|{
+            di * ei
+        }).collect();
+        let group3:Vec<_> = left.into_iter().zip(right).filter(|(p,q)|p.x != q.x).zip(r).map(|((p,q),ri)|{
+            let m = ri * (q.y - p.y);
+            let x3 = m.square() - p.x - q.x;
+            let y3 = m * (p.x - x3) - p.y;
+            Self::new(x3,y3,false)
+        }).collect();
+        let res:Vec<_> = group1.into_iter().chain(group2.into_iter()).chain(group3.into_iter()).collect();
+        res
+    }
+
+    // for n points P1,...,Pn, calculate P1+...+Pn
+    pub fn batch_affine_addition(pts: Vec<Self>) -> Self {
+        if pts.len() < 4 {
+            let res = pts.into_iter().fold(Self::zero(),|acc, pt|{
+                acc + pt
+            });
+            return res;
+        }
+        let n = pts.len();
+        let left = &pts[0..pts.len()/2];
+        let right = &pts[pts.len()/2..pts.len()];
+        let middle = Self::batch_affine_pair_addition(left, right);
+        Self::batch_affine_addition(middle)
+    }
 }
 
 impl<P: Parameters> Zeroize for GroupAffine<P> {
