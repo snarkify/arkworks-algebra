@@ -27,7 +27,7 @@ impl VariableBaseMSM {
         }
         w
     }
-    fn pre_calculate<G: AffineCurve>(
+    fn pre_calculate_hm<G: AffineCurve>(
         a: &[usize],
         vs: &[G::Projective],
     ) -> HashMap<Vec<usize>, G::Projective> {
@@ -45,6 +45,32 @@ impl VariableBaseMSM {
             acc
         });
         hm
+    }
+    fn pre_calculate<G: AffineCurve>(
+        a: &[usize],
+        vs: &[G::Projective],
+    ) -> Vec<G::Projective> {
+        let zero = G::Projective::zero();
+        let mut buckets = vec![zero; 1 << a.len()];
+        let shift = a[0];
+        a.iter().fold(vec![vec![]], |mut acc, idx| {
+            let init:usize = 0;
+            let delta = acc.clone().into_iter().map(|mut prev| {
+                let mut arr_idx= prev.clone().into_iter().fold(init,|mut d, i|{
+                    d += 1<<(i-shift) as usize;
+                    d
+                });
+                let mut v= buckets[arr_idx].clone();
+                v += vs[*idx];
+                prev.push(*idx);
+                arr_idx += 1<<(idx - shift);
+                buckets[arr_idx] = v;
+                prev
+            });
+            acc.extend(delta);
+            acc
+        });
+        buckets
     }
     pub fn multiexp_bin<G: AffineCurve>(
         gs: Vec<G::Projective>,
@@ -67,7 +93,7 @@ impl VariableBaseMSM {
         let cache: Vec<HashMap<Vec<usize>, G::Projective>> = buckets
             .clone()
             .into_iter()
-            .map(|bk| Self::pre_calculate::<G>(&bk, &gs))
+            .map(|bk| Self::pre_calculate_hm::<G>(&bk, &gs))
             .collect();
 
         let Gs: Vec<_> = ark_std::cfg_into_iter!(0..es[0].len())
@@ -101,16 +127,14 @@ impl VariableBaseMSM {
         let gs = &gs[..size];
         let mut b = ark_std::log2(size - ark_std::log2(size) as usize) as usize;
         b = if b > 0 { b } else { 1 };
-        // println!("hehe, size={}, gs.len={}, es.len={} es[0].len={}, b={}", size,
-        // gs.len(), es.len(),es[0].len(), b);
-        let buckets: Vec<Vec<usize>> = (0..size)
+        let bks: Vec<Vec<usize>> = (0..size)
             .step_by(b)
             .into_iter()
             .map(|i| (i..ark_std::cmp::min(i + b, size)).collect())
             .collect();
 
         // store the pre calculated hashmap on each bucket
-        let cache: Vec<HashMap<Vec<usize>, G::Projective>> = buckets
+        let cache: Vec<Vec<G::Projective>> = bks
             .clone()
             .into_iter()
             .map(|bk| Self::pre_calculate::<G>(&bk, &gs))
@@ -118,21 +142,16 @@ impl VariableBaseMSM {
 
         let Gs: Vec<_> = ark_std::cfg_into_iter!(0..es[0].len())
             .map(|k| {
-                let pts: Vec<_>= buckets.clone().into_iter().zip(&cache).map(
+                let pts: Vec<_>= bks.clone().into_iter().zip(&cache).map(
                     |(bk, vs)| {
-                        let mut tmp: Vec<_> = Vec::new();
+                        let mut arr_idx:usize = 0;
+                        let shift =bk[0];
                         for idx in bk {
                             if es[idx][k] {
-                                tmp.push(idx);
+                                arr_idx += 1 << (idx-shift);
                             }
                         }
-                        let res:G::Projective;
-                            if tmp.len() > 0 {
-                                res = *vs.get(&tmp).unwrap()
-                            } else {
-                                res = G::Projective::zero()
-                            }
-                        res
+                        vs[arr_idx]
                     }).filter(|x|!x.is_zero()).map(|x|x.into_affine()).collect();
                 pts
             }).collect();
