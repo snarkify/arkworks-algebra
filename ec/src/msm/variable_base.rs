@@ -1,6 +1,8 @@
 use ark_ff::prelude::*;
 use ark_std::vec::Vec;
 use std::collections::HashMap;
+use std::time::{Duration,Instant};
+
 
 use crate::{bls12::G1Projective, AffineCurve, ProjectiveCurve};
 
@@ -81,8 +83,6 @@ impl VariableBaseMSM {
         let gs = &gs[..size];
         let mut b = ark_std::log2(size - ark_std::log2(size) as usize) as usize;
         b = if b > 0 { b } else { 1 };
-        // println!("hehe, size={}, gs.len={}, es.len={} es[0].len={}, b={}", size,
-        // gs.len(), es.len(),es[0].len(), b);
         let buckets: Vec<Vec<usize>> = (0..size)
             .step_by(b)
             .into_iter()
@@ -134,11 +134,15 @@ impl VariableBaseMSM {
             .collect();
 
         // store the pre calculated hashmap on each bucket
+        let mut start = Instant::now();
         let cache: Vec<Vec<G::Projective>> = bks
             .clone()
             .into_iter()
             .map(|bk| Self::pre_calculate::<G>(&bk, &gs))
             .collect();
+        let mut duration = start.elapsed();
+        println!("pippenger+batch | multiexp_affine | cache calculation {:?}", duration);
+        start = Instant::now();
 
         let Gs: Vec<_> = ark_std::cfg_into_iter!(0..es[0].len())
             .map(|k| {
@@ -155,6 +159,8 @@ impl VariableBaseMSM {
                     }).filter(|x|!x.is_zero()).map(|x|x.into_affine()).collect();
                 pts
             }).collect();
+        duration = start.elapsed();
+        println!("pippenger+batch | multiexp_affine | Gs buckets collect from cache {:?}", duration);
         Gs
     }
 
@@ -175,6 +181,7 @@ impl VariableBaseMSM {
         let s = Self::sqrt(num_bits / size) + 1;
         let t = (num_bits as f64 / s as f64).ceil() as usize;
 
+        let mut start = Instant::now();
         let gs_bin: Vec<Vec<_>> = ark_std::cfg_into_iter!(scalars_and_bases.clone())
             .map(|(_, g)| {
                 let mut g0 = G::Projective::zero();
@@ -189,6 +196,9 @@ impl VariableBaseMSM {
             })
             .collect();
         let gs: Vec<_> = gs_bin.into_iter().flatten().collect();
+        let mut duration = start.elapsed();
+        println!("pippenger+batch | pippenger_batch_affine| gs_bin {:?}", duration);
+        start = Instant::now();
 
         let es_bin: Vec<Vec<Vec<bool>>> = ark_std::cfg_into_iter!(scalars_and_bases)
             .map(|(scalar, _)| {
@@ -207,7 +217,12 @@ impl VariableBaseMSM {
             })
             .collect();
         let es: Vec<_> = es_bin.into_iter().flatten().collect();
+        duration = start.elapsed();
+        println!("pippenger+batch | pippenger_batch_affine| es_bin {:?}", duration);
+        start = Instant::now();
         let Gs: Vec<_> = Self::multiexp_affine::<G>(gs, es);
+        duration = start.elapsed();
+        println!("pippenger+batch | pippenger_batch_affine| multiexp_affine {:?}", duration);
         (Gs, s)
     }
 
@@ -296,6 +311,7 @@ impl VariableBaseMSM {
         let fr_one = G::ScalarField::one().into_repr();
 
         let zero = G::Projective::zero();
+        let start = Instant::now();
         let window_starts: Vec<_> = (0..num_bits).step_by(c).collect();
 
         // chao: res=sum_{i=0}^{N-1} e_i*g_i=\sum_{w=0}^{t-1}(\sum_{i=0}^{N-1}
@@ -365,6 +381,8 @@ impl VariableBaseMSM {
             .collect();
         // We store the sum for the lowest window.
         let lowest = *window_sums.first().unwrap();
+        let mut duration = start.elapsed();
+        println!("baseline window_sums: {:?}", duration);
 
         // We're traversing windows from high to low.
         lowest
@@ -396,8 +414,8 @@ impl VariableBaseMSM {
         };
 
         let num_bits = <G::ScalarField as PrimeField>::Params::MODULUS_BITS as usize;
+        let start = Instant::now();
         let window_starts: Vec<_> = (0..num_bits).step_by(c).collect();
-
         let window_buckets: Vec<_> = ark_std::cfg_into_iter!(window_starts)
             .map(|w_start| {
                 // We don't need the "zero" bucket, so we only have 2^c - 1 buckets.
@@ -425,6 +443,8 @@ impl VariableBaseMSM {
                 buckets
             })
             .collect();
+        let duration = start.elapsed();
+        println!("baseline+affine window_buckets: {:?}", duration);
         (window_buckets, c)
     }
 
