@@ -379,4 +379,53 @@ impl VariableBaseMSM {
                     total
                 })
     }
+
+    pub fn multi_scalar_mul_batch_affine<G: AffineCurve>(
+        bases: &[G],
+        scalars: &[<G::ScalarField as PrimeField>::BigInt],
+    ) -> (Vec<Vec<Vec<G>>>,usize)  {
+        let size = ark_std::cmp::min(bases.len(), scalars.len());
+        let scalars = &scalars[..size];
+        let bases = &bases[..size];
+        let scalars_and_bases_iter = scalars.iter().zip(bases).filter(|(s, _)| !s.is_zero());
+
+        let c = if size < 32 {
+            3
+        } else {
+            super::ln_without_floats(size) + 2
+        };
+
+        let num_bits = <G::ScalarField as PrimeField>::Params::MODULUS_BITS as usize;
+        let window_starts: Vec<_> = (0..num_bits).step_by(c).collect();
+
+        let window_buckets: Vec<_> = ark_std::cfg_into_iter!(window_starts)
+            .map(|w_start| {
+                // We don't need the "zero" bucket, so we only have 2^c - 1 buckets.
+                let mut buckets = vec![Vec::new();(1<<c)-1];
+                // This clone is cheap, because the iterator contains just a
+                // pointer and an index into the original vectors.
+                scalars_and_bases_iter.clone().for_each(|(&scalar, base)| {
+                    let mut scalar = scalar;
+
+                    // We right-shift by w_start, thus getting rid of the
+                    // lower bits.
+                    scalar.divn(w_start as u32);
+
+                    // We mod the remaining bits by 2^{window size}, thus taking `c` bits.
+                    // notice that c < 64
+                    let scalar = scalar.as_ref()[0] % (1 << c);
+
+                    // If the scalar is non-zero, we update the corresponding
+                    // bucket.
+                    // (Recall that `buckets` doesn't have a zero bucket.)
+                    if scalar != 0 {
+                        buckets[(scalar - 1) as usize].push(*base);
+                    }
+                });
+                buckets
+            })
+            .collect();
+        (window_buckets, c)
+    }
+
 }
