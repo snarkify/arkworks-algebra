@@ -350,7 +350,7 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
         // - y_3 = lambda * (x_1 - x_3) - y_1
 
         // Batch invert accumulator
-        let mut acc = Self::ScalarField::one().into_repr();
+        let mut acc = Self::BaseField::one();
 
         for i in (0..num_points).step_by(2) {
             // Where that result of the point addition will be stored
@@ -375,7 +375,7 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
 
             if COMPLETE {
                 // Nothing to do here if one of the points is zero
-                if (points[i].is_identity() | points[i + 1].is_identity()).into() {
+                if points[i].is_zero() | points[i + 1].is_zero() {
                     continue;
                 }
 
@@ -395,12 +395,12 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
                         // (3 * x^2) * acc
                         points[i + 1].y = (xx + xx + xx) * acc;
                         // acc * (2 * y)
-                        acc *= points[i + 1].x;
+                        acc = acc * points[i + 1].x;
                         continue;
                     } else {
                         // Zero
-                        points[i] = Self::identity();
-                        points[i + 1] = Self::identity();
+                        points[i] = Self::zero();
+                        points[i + 1] = Self::zero();
                         continue;
                     }
                 }
@@ -419,10 +419,10 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
         // Batch invert
         if COMPLETE {
             if (!acc.is_zero()).into() {
-                acc = acc.invert().unwrap();
+                acc = acc.inverse().unwrap();
             }
         } else {
-            acc = acc.invert().unwrap();
+            acc = acc.inverse().unwrap();
         }
 
         for i in (0..num_points).step_by(2).rev() {
@@ -437,12 +437,12 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
 
             if COMPLETE {
                 // points[i] is zero so the sum is points[i + 1]
-                if points[i].is_identity().into() {
+                if points[i].is_zero() {
                     points[out_idx] = points[i + 1];
                     continue;
                 }
                 // points[i + 1] is zero so the sum is points[i]
-                if points[i + 1].is_identity().into() {
+                if points[i + 1].is_zero() {
                     points[out_idx] = points[i];
                     continue;
                 }
