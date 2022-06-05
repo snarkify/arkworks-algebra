@@ -1,7 +1,9 @@
 mod fixed_base;
 mod variable_base;
+mod variable_base_opt;
 pub use fixed_base::*;
 pub use variable_base::*;
+pub use variable_base_opt::*;
 
 /// The result of this function is only approximately `ln(a)`
 /// [`Explanation of usage`]

@@ -1,13 +1,8 @@
 use ark_ff::prelude::*;
 use ark_std::vec::Vec;
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
 
-use crate::{bls12::G1Projective, AffineCurve, ProjectiveCurve};
+use crate::{AffineCurve, ProjectiveCurve};
 
-use crate::bn::G1Affine;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
