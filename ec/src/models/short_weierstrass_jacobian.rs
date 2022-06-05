@@ -149,55 +149,76 @@ impl<P: Parameters> GroupAffine<P> {
             left = tmp;
         }
         let l = left.len();
-        let group1: Vec<_>= right[l..right.len()].to_vec();
+        let group1: Vec<_> = right[l..right.len()].to_vec();
         right = &right[0..l];
-        let group2:Vec<_> = left.clone().into_iter().zip(right.clone()).filter(|(p,q)|p.x == q.x).map(|(p,q)|{
-            p.into_projective().add_mixed(q).into_affine()
-        }).collect();
-        let a: Vec<_> = left.clone().into_iter().zip(right.clone()).filter(|(p,q)|p.x!=q.x).map(|(p,q)|{
-            q.x - p.x
-        }).collect();
+        let group2: Vec<_> = left
+            .clone()
+            .into_iter()
+            .zip(right.clone())
+            .filter(|(p, q)| p.x == q.x)
+            .map(|(p, q)| p.into_projective().add_mixed(q).into_affine())
+            .collect();
+        let a: Vec<_> = left
+            .clone()
+            .into_iter()
+            .zip(right.clone())
+            .filter(|(p, q)| p.x != q.x)
+            .map(|(p, q)| q.x - p.x)
+            .collect();
         if a.len() == 0 {
             return group1.into_iter().chain(group2.into_iter()).collect();
         }
 
         let mut d: Vec<_> = vec![P::BaseField::one()];
-        let _ :Vec<_>= (0..a.len()-1).zip(&a[0..a.len()-1]).map(|(idx,ai)|{
-            let tmp = d[idx] * ai;
-            d.push(tmp);
-        }).collect();
-        let tmp = d[d.len()-1] * a[a.len()-1];
+        let _: Vec<_> = (0..a.len() - 1)
+            .zip(&a[0..a.len() - 1])
+            .map(|(idx, ai)| {
+                let tmp = d[idx] * ai;
+                d.push(tmp);
+            })
+            .collect();
+        let tmp = d[d.len() - 1] * a[a.len() - 1];
         let s = tmp.inverse().unwrap();
         let mut e: Vec<_> = vec![s];
-        let _: Vec<_> = (1..a.len()).zip(&a[1..a.len()]).rev().map(|(idx,ai)|{
-            let tmp = e[a.len() -1 -idx]* ai;
-            e.push(tmp);
-        }).collect();
+        let _: Vec<_> = (1..a.len())
+            .zip(&a[1..a.len()])
+            .rev()
+            .map(|(idx, ai)| {
+                let tmp = e[a.len() - 1 - idx] * ai;
+                e.push(tmp);
+            })
+            .collect();
         e = e.into_iter().rev().collect();
-        let r: Vec<_> = d.into_iter().zip(e).map(|(di,ei)|{
-            di * ei
-        }).collect();
-        let group3:Vec<_> = left.into_iter().zip(right).filter(|(p,q)|p.x != q.x).zip(r).map(|((p,q),ri)|{
-            let m = ri * (q.y - p.y);
-            let x3 = m.square() - p.x - q.x;
-            let y3 = m * (p.x - x3) - p.y;
-            Self::new(x3,y3,false)
-        }).collect();
-        let res:Vec<_> = group1.into_iter().chain(group2.into_iter()).chain(group3.into_iter()).collect();
+        let r: Vec<_> = d.into_iter().zip(e).map(|(di, ei)| di * ei).collect();
+        let group3: Vec<_> = left
+            .into_iter()
+            .zip(right)
+            .filter(|(p, q)| p.x != q.x)
+            .zip(r)
+            .map(|((p, q), ri)| {
+                let m = ri * (q.y - p.y);
+                let x3 = m.square() - p.x - q.x;
+                let y3 = m * (p.x - x3) - p.y;
+                Self::new(x3, y3, false)
+            })
+            .collect();
+        let res: Vec<_> = group1
+            .into_iter()
+            .chain(group2.into_iter())
+            .chain(group3.into_iter())
+            .collect();
         res
     }
 
     // for n points P1,...,Pn, calculate P1+...+Pn
     pub fn batch_affine_addition(pts: Vec<Self>) -> Self {
         if pts.len() < 4 {
-            let res = pts.into_iter().fold(Self::zero(),|acc, pt|{
-                acc + pt
-            });
+            let res = pts.into_iter().fold(Self::zero(), |acc, pt| acc + pt);
             return res;
         }
         let n = pts.len();
-        let left = &pts[0..pts.len()/2];
-        let right = &pts[pts.len()/2..pts.len()];
+        let left = &pts[0..pts.len() / 2];
+        let right = &pts[pts.len() / 2..pts.len()];
         let middle = Self::batch_affine_pair_addition(left, right);
         Self::batch_affine_addition(middle)
     }
@@ -303,6 +324,139 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
 
     fn mul_by_cofactor_inv(&self) -> Self {
         self.mul(P::COFACTOR_INV).into()
+    }
+
+    fn batch_add<const COMPLETE: bool, const LOAD_POINTS: bool>(
+        points: &mut [Self],
+        output_indices: &[u32],
+        num_points: usize,
+        offset: usize,
+        bases: &[Self],
+        base_positions: &[u32],
+    ) {
+        let get_point = |point_data: u32| -> Self {
+            let negate = point_data & 0x80000000 != 0;
+            let base_idx = (point_data & 0x7FFFFFFF) as usize;
+            if negate {
+                bases[base_idx].neg()
+            } else {
+                bases[base_idx]
+            }
+        };
+
+        // Affine addition formula (P != Q):
+        // - lambda = (y_2 - y_1) / (x_2 - x_1)
+        // - x_3 = lambda^2 - (x_2 + x_1)
+        // - y_3 = lambda * (x_1 - x_3) - y_1
+
+        // Batch invert accumulator
+        let mut acc = Self::ScalarField::one().into_repr();
+
+        for i in (0..num_points).step_by(2) {
+            // Where that result of the point addition will be stored
+            let out_idx = output_indices[i >> 1] as usize - offset;
+
+            #[cfg(feature = "prefetch")]
+            if i < num_points - 2 {
+                if LOAD_POINTS {
+                    // chao: prefetch cache line of next pair of points
+                    crate::prefetch::<Self>(bases, base_positions[i + 2] as usize);
+                    crate::prefetch::<Self>(bases, base_positions[i + 3] as usize);
+                }
+                // chao: why prefetch next out_idx
+                crate::prefetch::<Self>(points, output_indices[(i >> 1) + 1] as usize - offset);
+            }
+            if LOAD_POINTS {
+                // chao: this is first level, will not override the scattered points
+                // because the scattered points are not in level 1
+                points[i] = get_point(base_positions[i]);
+                points[i + 1] = get_point(base_positions[i + 1]);
+            }
+
+            if COMPLETE {
+                // Nothing to do here if one of the points is zero
+                if (points[i].is_identity() | points[i + 1].is_identity()).into() {
+                    continue;
+                }
+
+                if points[i].x == points[i + 1].x {
+                    if points[i].y == points[i + 1].y {
+                        // Point doubling (P == Q)
+                        // - s = (3 * x^2) / (2 * y)
+                        // - x_2 = s^2 - (2 * x)
+                        // - y_2 = s * (x - x_2) - y
+
+                        // (2 * x)
+                        points[out_idx].x = points[i].x + points[i].x;
+                        // x^2
+                        let xx = points[i].x.square();
+                        // (2 * y)
+                        points[i + 1].x = points[i].y + points[i].y;
+                        // (3 * x^2) * acc
+                        points[i + 1].y = (xx + xx + xx) * acc;
+                        // acc * (2 * y)
+                        acc *= points[i + 1].x;
+                        continue;
+                    } else {
+                        // Zero
+                        points[i] = Self::identity();
+                        points[i + 1] = Self::identity();
+                        continue;
+                    }
+                }
+            }
+
+            // (x_2 + x_1)
+            points[out_idx].x = points[i].x + points[i + 1].x;
+            // (x_2 - x_1)
+            points[i + 1].x -= points[i].x;
+            // (y2 - y1) * acc
+            points[i + 1].y = (points[i + 1].y - points[i].y) * acc;
+            // acc * (x_2 - x_1)
+            acc *= points[i + 1].x;
+        }
+
+        // Batch invert
+        if COMPLETE {
+            if (!acc.is_zero()).into() {
+                acc = acc.invert().unwrap();
+            }
+        } else {
+            acc = acc.invert().unwrap();
+        }
+
+        for i in (0..num_points).step_by(2).rev() {
+            // Where that result of the point addition will be stored
+            let out_idx = output_indices[i >> 1] as usize - offset;
+
+            #[cfg(feature = "prefetch")]
+            if i > 0 {
+                // chao: why prefetch previous out_idx ??
+                crate::prefetch::<Self>(points, output_indices[(i >> 1) - 1] as usize - offset);
+            }
+
+            if COMPLETE {
+                // points[i] is zero so the sum is points[i + 1]
+                if points[i].is_identity().into() {
+                    points[out_idx] = points[i + 1];
+                    continue;
+                }
+                // points[i + 1] is zero so the sum is points[i]
+                if points[i + 1].is_identity().into() {
+                    points[out_idx] = points[i];
+                    continue;
+                }
+            }
+
+            // lambda
+            points[i + 1].y *= acc;
+            // acc * (x_2 - x_1)
+            acc *= points[i + 1].x;
+            // x_3 = lambda^2 - (x_2 + x_1)
+            points[out_idx].x = points[i + 1].y.square() - points[out_idx].x;
+            // y_3 = lambda * (x_1 - x_3) - y_1
+            points[out_idx].y = points[i + 1].y * (points[i].x - points[out_idx].x) - points[i].y;
+        }
     }
 }
 

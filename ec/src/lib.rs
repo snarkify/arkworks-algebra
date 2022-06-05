@@ -290,6 +290,17 @@ pub trait AffineCurve:
     /// `Self::ScalarField`.
     #[must_use]
     fn mul_by_cofactor_inv(&self) -> Self;
+
+    /// Batched point addition.
+    /// If COMPLETE is set to false the points need to be linearly independent.
+    fn batch_add<const COMPLETE: bool, const LOAD_POINTS: bool>(
+        points: &mut [Self],
+        output_indices: &[u32],
+        num_points: usize,
+        offset: usize,
+        bases: &[Self],
+        base_positions: &[u32],
+    );
 }
 
 impl<C: ProjectiveCurve> Group for C {
@@ -347,4 +358,16 @@ pub trait PairingFriendlyCycle: CurveCycle {
         Fq = <Self::E2 as AffineCurve>::BaseField,
         Fr = <Self::E2 as AffineCurve>::ScalarField,
     >;
+}
+
+#[cfg(feature = "prefetch")]
+#[inline(always)]
+pub fn prefetch<T>(data: &[T], offset: usize) {
+    use core::arch::x86_64::_mm_prefetch;
+    unsafe {
+        _mm_prefetch(
+            data.as_ptr().offset(offset as isize) as *const i8,
+            core::arch::x86_64::_MM_HINT_T0,
+        );
+    }
 }

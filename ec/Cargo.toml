@@ -23,5 +23,6 @@ zeroize = { version = "1", default-features = false, features = ["zeroize_derive
 
 [features]
 default = []
+prefetch = []
 std = [ "ark-std/std", "ark-ff/std", "ark-serialize/std" ]
 parallel = [ "std", "rayon", "ark-std/parallel" ]
