@@ -1,14 +1,15 @@
 use ark_ff::prelude::*;
 use ark_std::vec::Vec;
-use std::collections::HashMap;
-use std::time::{Duration,Instant};
-
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use crate::{bls12::G1Projective, AffineCurve, ProjectiveCurve};
 
+use crate::bn::G1Affine;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
-use crate::bn::G1Affine;
 
 pub struct VariableBaseMSM;
 
@@ -48,24 +49,21 @@ impl VariableBaseMSM {
         });
         hm
     }
-    fn pre_calculate<G: AffineCurve>(
-        a: &[usize],
-        vs: &[G::Projective],
-    ) -> Vec<G::Projective> {
+    fn pre_calculate<G: AffineCurve>(a: &[usize], vs: &[G::Projective]) -> Vec<G::Projective> {
         let zero = G::Projective::zero();
         let mut buckets = vec![zero; 1 << a.len()];
         let shift = a[0];
         a.iter().fold(vec![vec![]], |mut acc, idx| {
-            let init:usize = 0;
+            let init: usize = 0;
             let delta = acc.clone().into_iter().map(|mut prev| {
-                let mut arr_idx= prev.clone().into_iter().fold(init,|mut d, i|{
-                    d += 1<<(i-shift) as usize;
+                let mut arr_idx = prev.clone().into_iter().fold(init, |mut d, i| {
+                    d += 1 << (i - shift) as usize;
                     d
                 });
-                let mut v= buckets[arr_idx].clone();
+                let mut v = buckets[arr_idx].clone();
                 v += vs[*idx];
                 prev.push(*idx);
-                arr_idx += 1<<(idx - shift);
+                arr_idx += 1 << (idx - shift);
                 buckets[arr_idx] = v;
                 prev
             });
@@ -134,40 +132,41 @@ impl VariableBaseMSM {
             .collect();
 
         // store the pre calculated hashmap on each bucket
-        let mut start = Instant::now();
         let cache: Vec<Vec<G::Projective>> = bks
             .clone()
             .into_iter()
             .map(|bk| Self::pre_calculate::<G>(&bk, &gs))
             .collect();
-        let mut duration = start.elapsed();
-        println!("pippenger+batch | multiexp_affine | cache calculation {:?}", duration);
-        start = Instant::now();
 
         let Gs: Vec<_> = ark_std::cfg_into_iter!(0..es[0].len())
             .map(|k| {
-                let pts: Vec<_>= bks.clone().into_iter().zip(&cache).map(
-                    |(bk, vs)| {
-                        let mut arr_idx:usize = 0;
-                        let shift =bk[0];
+                let pts: Vec<_> = bks
+                    .clone()
+                    .into_iter()
+                    .zip(&cache)
+                    .map(|(bk, vs)| {
+                        let mut arr_idx: usize = 0;
+                        let shift = bk[0];
                         for idx in bk {
                             if es[idx][k] {
-                                arr_idx += 1 << (idx-shift);
+                                arr_idx += 1 << (idx - shift);
                             }
                         }
                         vs[arr_idx]
-                    }).filter(|x|!x.is_zero()).map(|x|x.into_affine()).collect();
+                    })
+                    .filter(|x| !x.is_zero())
+                    .map(|x| x.into_affine())
+                    .collect();
                 pts
-            }).collect();
-        duration = start.elapsed();
-        println!("pippenger+batch | multiexp_affine | Gs buckets collect from cache {:?}", duration);
+            })
+            .collect();
         Gs
     }
 
     pub fn pippenger_batch_affine<G: AffineCurve>(
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
-    ) -> (Vec<Vec<G>>,usize) {
+    ) -> (Vec<Vec<G>>, usize) {
         let mut size = ark_std::cmp::min(bases.len(), scalars.len());
         let scalars = &scalars[..size];
         let bases = &bases[..size];
@@ -181,7 +180,6 @@ impl VariableBaseMSM {
         let s = Self::sqrt(num_bits / size) + 1;
         let t = (num_bits as f64 / s as f64).ceil() as usize;
 
-        let mut start = Instant::now();
         let gs_bin: Vec<Vec<_>> = ark_std::cfg_into_iter!(scalars_and_bases.clone())
             .map(|(_, g)| {
                 let mut g0 = G::Projective::zero();
@@ -196,9 +194,6 @@ impl VariableBaseMSM {
             })
             .collect();
         let gs: Vec<_> = gs_bin.into_iter().flatten().collect();
-        let mut duration = start.elapsed();
-        println!("pippenger+batch | pippenger_batch_affine| gs_bin {:?}", duration);
-        start = Instant::now();
 
         let es_bin: Vec<Vec<Vec<bool>>> = ark_std::cfg_into_iter!(scalars_and_bases)
             .map(|(scalar, _)| {
@@ -217,15 +212,9 @@ impl VariableBaseMSM {
             })
             .collect();
         let es: Vec<_> = es_bin.into_iter().flatten().collect();
-        duration = start.elapsed();
-        println!("pippenger+batch | pippenger_batch_affine| es_bin {:?}", duration);
-        start = Instant::now();
         let Gs: Vec<_> = Self::multiexp_affine::<G>(gs, es);
-        duration = start.elapsed();
-        println!("pippenger+batch | pippenger_batch_affine| multiexp_affine {:?}", duration);
         (Gs, s)
     }
-
 
     pub fn pippenger_mul<G: AffineCurve>(
         bases: &[G],
@@ -311,7 +300,6 @@ impl VariableBaseMSM {
         let fr_one = G::ScalarField::one().into_repr();
 
         let zero = G::Projective::zero();
-        let start = Instant::now();
         let window_starts: Vec<_> = (0..num_bits).step_by(c).collect();
 
         // chao: res=sum_{i=0}^{N-1} e_i*g_i=\sum_{w=0}^{t-1}(\sum_{i=0}^{N-1}
@@ -381,8 +369,6 @@ impl VariableBaseMSM {
             .collect();
         // We store the sum for the lowest window.
         let lowest = *window_sums.first().unwrap();
-        let mut duration = start.elapsed();
-        println!("baseline window_sums: {:?}", duration);
 
         // We're traversing windows from high to low.
         lowest
@@ -401,7 +387,7 @@ impl VariableBaseMSM {
     pub fn multi_scalar_mul_batch_affine<G: AffineCurve>(
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
-    ) -> (Vec<Vec<Vec<G>>>,usize)  {
+    ) -> (Vec<Vec<Vec<G>>>, usize) {
         let size = ark_std::cmp::min(bases.len(), scalars.len());
         let scalars = &scalars[..size];
         let bases = &bases[..size];
@@ -414,12 +400,11 @@ impl VariableBaseMSM {
         };
 
         let num_bits = <G::ScalarField as PrimeField>::Params::MODULUS_BITS as usize;
-        let start = Instant::now();
         let window_starts: Vec<_> = (0..num_bits).step_by(c).collect();
         let window_buckets: Vec<_> = ark_std::cfg_into_iter!(window_starts)
             .map(|w_start| {
                 // We don't need the "zero" bucket, so we only have 2^c - 1 buckets.
-                let mut buckets = vec![Vec::new();(1<<c)-1];
+                let mut buckets = vec![Vec::new(); (1 << c) - 1];
                 // This clone is cheap, because the iterator contains just a
                 // pointer and an index into the original vectors.
                 scalars_and_bases_iter.clone().for_each(|(&scalar, base)| {
@@ -443,9 +428,6 @@ impl VariableBaseMSM {
                 buckets
             })
             .collect();
-        let duration = start.elapsed();
-        println!("baseline+affine window_buckets: {:?}", duration);
         (window_buckets, c)
     }
-
 }
