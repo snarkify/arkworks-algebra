@@ -359,7 +359,6 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
             #[cfg(feature = "prefetch")]
             if i < num_points - 2 {
                 if LOAD_POINTS {
-                    // chao: prefetch cache line of next pair of points
                     crate::prefetch::<Self>(bases, base_positions[i + 2] as usize);
                     crate::prefetch::<Self>(bases, base_positions[i + 3] as usize);
                 }
@@ -368,7 +367,6 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
             }
             if LOAD_POINTS {
                 // chao: this is first level, will not override the scattered points
-                // because the scattered points are not in level 1
                 points[i] = get_point(base_positions[i]);
                 points[i + 1] = get_point(base_positions[i + 1]);
             }
@@ -418,7 +416,7 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
 
         // Batch invert
         if COMPLETE {
-            if (!acc.is_zero()).into() {
+            if !acc.is_zero() {
                 acc = acc.inverse().unwrap();
             }
         } else {

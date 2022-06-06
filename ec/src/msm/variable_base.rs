@@ -30,12 +30,6 @@ impl VariableBaseMSM {
         let zero = G::Projective::zero();
         let window_starts: Vec<_> = (0..num_bits).step_by(c).collect();
 
-        // chao: res=sum_{i=0}^{N-1} e_i*g_i=\sum_{w=0}^{t-1}(\sum_{i=0}^{N-1}
-        // s_i*g_i)*2^{cw} where lambda: max bit length of field; c: window
-        // size, t=lambda/c s_i = \sum_{j=0}^{c=1} e_{i,j+cw}*2^j is the scalar
-        // value of window_id=w this is special case of short version of
-        // pippenger note, where s = c, and after flatten, choose b = c.
-
         // Each window is of size `c`.
         // We divide up the bits 0..num_bits into windows of size `c`, and
         // in parallel process each such window.
@@ -71,7 +65,6 @@ impl VariableBaseMSM {
                         }
                     }
                 });
-
                 // Compute sum_{i in 0..num_buckets} (sum_{j in i..num_buckets} bucket[j])
                 // This is computed below for b buckets, using 2b curve additions.
                 //

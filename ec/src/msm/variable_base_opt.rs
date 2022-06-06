@@ -1,4 +1,4 @@
-use crate::ark_std::string::ToString;
+use crate::{ark_std::string::ToString, msm::stop_measure};
 use ark_ff::prelude::*;
 use ark_std::vec::Vec;
 use core::{num, ops::AddAssign, slice};
@@ -19,7 +19,7 @@ fn get_wnaf_size_bits(num_bits: usize, w: usize) -> usize {
 
 fn get_wnaf_size<C: AffineCurve>(w: usize) -> usize {
     let lambda = <C::ScalarField as PrimeField>::Params::MODULUS_BITS;
-    get_wnaf_size_bits(div_up(lambda as usize, 2), w)
+    get_wnaf_size_bits(lambda as usize, w)
 }
 
 fn get_num_rounds<C: AffineCurve>(c: usize) -> usize {
@@ -47,6 +47,8 @@ fn get_wnaf<C: AffineCurve>(
     wnaf: &mut [u32],
     stride: usize,
 ) {
+    assert!(w >= 2);
+    assert!(w < 64);
     fn get_bits_at<C: AffineCurve>(
         v: &<C::ScalarField as PrimeField>::BigInt,
         pos: usize,
@@ -56,12 +58,6 @@ fn get_wnaf<C: AffineCurve>(
         v.divn(pos as u32);
         v.as_ref()[0] as usize % (1 << num) as usize
     }
-    // We right-shift by w_start, thus getting rid of the
-    // lower bits.
-    // scalar.divn(w_start as u32);
-    // We mod the remaining bits by 2^{window size}, thus taking `c` bits.
-    // notice that c < 64
-    // let scalar = scalar.as_ref()[0] % (1 << c);
 
     let mut borrow = 0;
     let max = 1 << (w - 1);
@@ -177,6 +173,18 @@ impl<C: AffineCurve> MultiExp<C> {
             bases: bases.to_vec(),
         }
     }
+    pub fn compute_msm_opt(
+        bases: &[C],
+        scalars: &[<C::ScalarField as PrimeField>::BigInt],
+    ) -> C::Projective {
+        let size = ark_std::cmp::min(bases.len(), scalars.len());
+        let scalars = &scalars[..size];
+        let bases = &bases[..size];
+        let msm = MultiExp::new(bases);
+        let mut ctx = MultiExpContext::default();
+        let res = msm.evaluate(&mut ctx, scalars, false);
+        res
+    }
 
     pub fn evaluate(
         &self,
@@ -206,9 +214,11 @@ impl<C: AffineCurve> MultiExp<C> {
         let mut rounds = ctx.rounds.get_rounds::<C>(coeffs.len(), c);
 
         // Get the bases for the coefficients
+        assert!(coeffs.len() == self.bases.len());
+        let start = super::start_measure("msm".to_string(), false);
         let bases = &self.bases[..coeffs.len()];
         if coeffs.len() >= 16 {
-            let num_points = coeffs.len() * 2;
+            let num_points = coeffs.len();
             let w = c + 1;
             let num_rounds = get_num_rounds::<C>(c);
 
@@ -229,21 +239,20 @@ impl<C: AffineCurve> MultiExp<C> {
                 // Get the final result of the round
                 *acc = accumulate_buckets(round, &mut ctx.points, c);
             }
-
-            // Accumulate round results
-            let res: <C as AffineCurve>::Projective =
-                partials
+            let lowest = partials[0];
+            let res = lowest
+                + partials
                     .iter()
-                    .rev()
                     .skip(1)
-                    .fold(partials[num_rounds - 1], |acc, partial| {
-                        let mut res: <C as AffineCurve>::Projective = acc;
+                    .rev()
+                    .fold(C::Projective::zero(), |mut total, sum_i| {
+                        total += sum_i;
                         for _ in 0..w {
-                            res = res.double();
+                            total.double_in_place();
                         }
-                        res.add_assign(partial);
-                        res
+                        total
                     });
+            stop_measure(start);
             res
         } else {
             // Just do a naive msm
@@ -251,6 +260,7 @@ impl<C: AffineCurve> MultiExp<C> {
             for (idx, coeff) in coeffs.iter().enumerate() {
                 acc += bases[idx].into_projective().mul(*coeff);
             }
+            stop_measure(start);
             acc
         }
     }
@@ -298,7 +308,6 @@ impl<C: AffineCurve> MultiExpContext<C> {
 
 impl SharedRoundData {
     fn get_rounds<C: AffineCurve>(&mut self, num_points: usize, c: usize) -> Vec<RoundData<'_>> {
-        let num_points = num_points * 2;
         let num_buckets = get_num_buckets(c);
         let num_rounds = get_num_rounds::<C>(c);
         let tree_size = num_points * 2 + num_buckets;
@@ -357,7 +366,6 @@ fn calculate_wnafs<C: AffineCurve>(
 
     let start = super::start_measure("calculate wnafs".to_string(), false);
     for (idx, coeff) in coeffs.iter().enumerate() {
-        let p: &[u64] = coeff.as_ref();
         get_wnaf::<C>(coeff, w, num_rounds, &mut wnafs[idx..], num_points);
     }
     super::stop_measure(start);
@@ -652,8 +660,8 @@ fn do_batch_additions<C: AffineCurve>(
     for i in 0..num_levels - 1 {
         let start = level_offset[i];
         let num_points = level_counter[i];
-        // We have to make sure we have an even amount here so we don't split within a
-        // pair
+        let points = &mut points[start..];
+        let output_indices = &output_indices[start / 2..];
         let offset = start;
         if i == 0 {
             let base_positions = &base_positions[start..];
@@ -703,36 +711,17 @@ fn accumulate_buckets<C: AffineCurve>(
     let start_time = super::start_measure("accumulate buckets".to_string(), false);
     let start = level_offset[num_levels - 1];
     let buckets = &mut points[start..(start + num_buckets)];
-    let mut results: Vec<C::Projective> = vec![C::Projective::zero(); num_buckets];
-    for ((bucket_size, bucket), result) in bucket_sizes[1..]
+    let mut res = C::Projective::zero();
+    let mut running_sum = C::Projective::zero();
+    bucket_sizes[1..]
         .into_iter()
-        .zip(buckets.iter_mut())
-        .zip(results.iter_mut())
-    {
-        // Accumulate all bucket results
-        let mut acc = C::Projective::zero();
-        let mut running_sum = C::Projective::zero();
-        if *bucket_size > 0 {
-            running_sum.add_assign_mixed(bucket);
-        }
-        acc = acc + &running_sum;
-        // Store the result
-        *result = acc;
-    }
+        .zip(buckets)
+        .rev()
+        .filter(|(bz, _)| **bz > 0)
+        .for_each(|(_, b)| {
+            running_sum.add_assign_mixed(b);
+            res += &running_sum;
+        });
     super::stop_measure(start_time);
-
-    // Add the results of all buckets together
-    results
-        .iter()
-        .fold(C::Projective::zero(), |acc, result| acc + result)
-}
-
-fn compute_msm_opt<C: AffineCurve>(
-    bases: &[C],
-    scalars: &[<C::ScalarField as PrimeField>::BigInt],
-) -> C::Projective {
-    let msm = MultiExp::new(bases);
-    let mut ctx = MultiExpContext::default();
-    let res = msm.evaluate(&mut ctx, scalars, false);
     res
 }
