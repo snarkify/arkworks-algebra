@@ -5,6 +5,7 @@
     clippy::suspicious_op_assign_impl,
     clippy::many_single_char_names
 )]
+#![allow(dead_code)]
 
 #[macro_use]
 extern crate derivative;

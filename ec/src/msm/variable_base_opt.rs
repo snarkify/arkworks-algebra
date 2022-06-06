@@ -1,6 +1,7 @@
 use ark_ff::prelude::*;
 use ark_std::vec::Vec;
 use core::slice;
+use num_traits::PrimInt;
 
 #[cfg(feature = "parallel")]
 use rayon::{current_num_threads, scope, Scope};
@@ -42,15 +43,33 @@ fn get_num_tree_levels(num_points: usize) -> usize {
 
 /// Returns the signed digit representation of value with the specified window
 /// size. The result is written to the wnaf slice with the specified stride.
-fn get_wnaf(value: u128, w: usize, num_rounds: usize, wnaf: &mut [u32], stride: usize) {
-    fn get_bits_at(v: u128, pos: usize, num: usize) -> usize {
-        ((v >> pos) & ((1 << num) - 1)) as usize
+fn get_wnaf<C: AffineCurve>(
+    value: <C::ScalarField as PrimeField>::BigInt,
+    w: usize,
+    num_rounds: usize,
+    wnaf: &mut [u32],
+    stride: usize,
+) {
+    fn get_bits_at<C: AffineCurve>(
+        v: &<C::ScalarField as PrimeField>::BigInt,
+        pos: usize,
+        num: usize,
+    ) -> usize {
+        let mut v = v.clone();
+        v.divn(pos as u32);
+        v.as_ref()[0] as usize % (1 << num) as usize
     }
+    // We right-shift by w_start, thus getting rid of the
+    // lower bits.
+    // scalar.divn(w_start as u32);
+    // We mod the remaining bits by 2^{window size}, thus taking `c` bits.
+    // notice that c < 64
+    // let scalar = scalar.as_ref()[0] % (1 << c);
 
     let mut borrow = 0;
     let max = 1 << (w - 1);
     for idx in 0..num_rounds {
-        let b = get_bits_at(value, idx * w, w) + borrow;
+        let b = get_bits_at::<C>(&value, idx * w, w) + borrow;
         if b >= max {
             // Set the highest bit to 1 to represent a negative value.
             // This way the lower bits directly represent the bucket index.
@@ -154,6 +173,14 @@ impl<C: AffineCurve> MultiExp<C> {
     /// Performs a multi-exponentiation operation.
     /// Set complete to true if the bases are not guaranteed linearly
     /// independent.
+
+    /// Create a new MultiExp instance with the specified bases
+    pub fn new(bases: &[C]) -> Self {
+        Self {
+            bases: bases.to_vec(),
+        }
+    }
+
     #[cfg(feature = "parallel")]
     pub fn evaluate(
         &self,
@@ -374,21 +401,7 @@ fn calculate_wnafs<C: AffineCurve>(
                 let wnafs = &mut wnafs_box.unwrap()[thread_idx * chunk_size..];
                 for (idx, coeff) in coeffs.iter().enumerate() {
                     let p: &[u64] = coeff.as_ref();
-                    // hehe, fix it
-                    get_wnaf(
-                        p[0] as u128,
-                        w,
-                        num_rounds,
-                        &mut wnafs[idx * 2..],
-                        num_points,
-                    );
-                    get_wnaf(
-                        p[2] as u128,
-                        w,
-                        num_rounds,
-                        &mut wnafs[idx * 2 + 1..],
-                        num_points,
-                    );
+                    get_wnaf(coeff, w, num_rounds, &mut wnaf[idx..], num_points);
                 }
             });
         }
@@ -842,4 +855,15 @@ fn accumulate_buckets<C: AffineCurve>(
     results
         .iter()
         .fold(C::Projective::zero(), |acc, result| acc + result)
+}
+
+#[cfg(feature = "parallel")]
+fn compute_msm_opt<C: AffineCurve>(
+    bases: &[C],
+    scalars: &[<C::ScalarField as PrimeField>::BigInt],
+) -> C::Projective {
+    let msm = MultiExp::new(bases);
+    let mut ctx = MultiExpContext::default();
+    let res = msm.evaluate_with(&mut ctx, scalars, false, c);
+    res
 }
