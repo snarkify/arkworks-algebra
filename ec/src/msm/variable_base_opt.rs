@@ -1,10 +1,11 @@
 use ark_ff::prelude::*;
 use ark_std::vec::Vec;
-
-use crate::{AffineCurve, ProjectiveCurve};
+use core::slice;
 
 #[cfg(feature = "parallel")]
-use rayon::prelude::*;
+use rayon::{current_num_threads, scope, Scope};
+
+use crate::{AffineCurve, ProjectiveCurve};
 
 fn num_bits(value: usize) -> usize {
     (0usize.leading_zeros() - value.leading_zeros()) as usize
@@ -19,7 +20,8 @@ fn get_wnaf_size_bits(num_bits: usize, w: usize) -> usize {
 }
 
 fn get_wnaf_size<C: AffineCurve>(w: usize) -> usize {
-    get_wnaf_size_bits(div_up(C::Scalar::NUM_BITS as usize, 2), w)
+    let lambda = <C::ScalarField as PrimeField>::Params::MODULUS_BITS;
+    get_wnaf_size_bits(div_up(lambda as usize, 2), w)
 }
 
 fn get_num_rounds<C: AffineCurve>(c: usize) -> usize {
@@ -149,53 +151,30 @@ struct ScatterData {
 }
 
 impl<C: AffineCurve> MultiExp<C> {
-    /// Create a new MultiExp instance with the specified bases
-    pub fn new(bases: &[C]) -> Self {
-        let mut endo_bases = vec![C::identity(); bases.len() * 2];
-
-        // Generate the endomorphism bases
-        let num_threads = multicore::current_num_threads();
-        multicore::scope(|scope| {
-            let num_points_per_thread = div_up(bases.len(), num_threads);
-            for (endo_bases, bases) in endo_bases
-                .chunks_mut(num_points_per_thread * 2)
-                .zip(bases.chunks(num_points_per_thread))
-            {
-                scope.spawn(move |_| {
-                    for (idx, base) in bases.iter().enumerate() {
-                        endo_bases[idx * 2] = *base;
-                        endo_bases[idx * 2 + 1] = C::get_endomorphism_base(base);
-                    }
-                });
-            }
-        });
-
-        Self { bases: endo_bases }
-    }
-
     /// Performs a multi-exponentiation operation.
     /// Set complete to true if the bases are not guaranteed linearly
     /// independent.
+    #[cfg(feature = "parallel")]
     pub fn evaluate(
         &self,
         ctx: &mut MultiExpContext<C>,
-        coeffs: &[C::ScalarField],
+        coeffs: &[<C::ScalarField as PrimeField>::BigInt],
         complete: bool,
-    ) -> C::Curve {
+    ) -> <C as AffineCurve>::Projective {
         self.evaluate_with(ctx, coeffs, complete, get_best_c(coeffs.len()))
     }
 
     /// Performs a multi-exponentiation operation with the given bucket width.
     /// Set complete to true if the bases are not guaranteed linearly
     /// independent.
+    #[cfg(feature = "parallel")]
     pub fn evaluate_with(
         &self,
         ctx: &mut MultiExpContext<C>,
-        coeffs: &[C::ScalarField],
+        coeffs: &[<C::ScalarField as PrimeField>::BigInt],
         complete: bool,
         c: usize,
-    ) -> C::Curve {
-        assert!(coeffs.len() * 2 <= self.bases.len());
+    ) -> <C as AffineCurve>::Projective {
         assert!(c >= 4);
 
         // Allocate more memory if required
@@ -205,10 +184,10 @@ impl<C: AffineCurve> MultiExp<C> {
         let mut rounds = ctx.rounds.get_rounds::<C>(coeffs.len(), c);
 
         // Get the bases for the coefficients
-        let bases = &self.bases[..coeffs.len() * 2];
+        let bases = &self.bases[..coeffs.len()];
 
-        let num_threads = multicore::current_num_threads();
-        let start = start_measure(
+        let num_threads = current_num_threads();
+        let start = super::start_measure(
             format!("msm {} ({}) ({} threads)", coeffs.len(), c, num_threads),
             false,
         );
@@ -225,40 +204,39 @@ impl<C: AffineCurve> MultiExp<C> {
             create_addition_trees(&mut rounds);
 
             // Now process each round individually
-            let mut partials = vec![C::Curve::identity(); num_rounds];
+            let mut partials = vec![C::Projective::zero(); num_rounds];
             for (round, acc) in rounds.iter().zip(partials.iter_mut()) {
                 // Scatter the odd points in the odd length buckets to the addition tree
                 do_point_scatter::<C>(round, bases, &mut ctx.points);
                 // Do all bucket additions
                 do_batch_additions::<C>(round, bases, &mut ctx.points, complete);
                 // Get the final result of the round
-                *acc = accumulate_buckets::<C>(round, &mut ctx.points, c);
+                *acc = accumulate_buckets(round, &mut ctx.points, c);
             }
 
             // Accumulate round results
-            let res =
+            let res: <C as AffineCurve>::Projective =
                 partials
                     .iter()
                     .rev()
                     .skip(1)
                     .fold(partials[num_rounds - 1], |acc, partial| {
-                        let mut res = acc;
+                        let mut res: <C as AffineCurve>::Projective = acc;
                         for _ in 0..w {
                             res = res.double();
                         }
-                        res + partial
+                        res.add_assign_mixed(partial);
+                        res
                     });
-            stop_measure(start);
-
+            super::stop_measure(start);
             res
         } else {
             // Just do a naive msm
-            let mut acc = C::Curve::identity();
+            let mut acc = C::Projective::zero();
             for (idx, coeff) in coeffs.iter().enumerate() {
-                // Skip over endomorphism bases
-                acc += bases[idx * 2] * coeff;
+                acc += bases[idx].into_projective().mul(*coeff);
             }
-            stop_measure(start);
+            super::stop_measure(start);
             acc
         }
     }
@@ -267,7 +245,6 @@ impl<C: AffineCurve> MultiExp<C> {
 impl<C: AffineCurve> MultiExpContext<C> {
     /// Allocate memory for the evalution
     pub fn allocate(&mut self, num_points: usize, c: usize) {
-        let num_points = num_points * 2;
         let num_buckets = get_num_buckets(c);
         let num_rounds = get_num_rounds::<C>(c);
         let tree_size = get_max_tree_size(num_points, c);
@@ -277,7 +254,7 @@ impl<C: AffineCurve> MultiExpContext<C> {
 
         // Allocate memory when necessary
         if self.points.len() < tree_size {
-            self.points.resize(tree_size, C::identity());
+            self.points.resize(tree_size, C::zero());
         }
         if self.wnafs.len() < num_points_total {
             self.wnafs.resize(num_points_total, 0u32);
@@ -306,7 +283,7 @@ impl<C: AffineCurve> MultiExpContext<C> {
 }
 
 impl SharedRoundData {
-    fn get_rounds<C: AffineCurve>(&mut self, num_points: usize, c: usize) -> Vec<RoundData> {
+    fn get_rounds<C: AffineCurve>(&mut self, num_points: usize, c: usize) -> Vec<RoundData<'_>> {
         let num_points = num_points * 2;
         let num_buckets = get_num_buckets(c);
         let num_rounds = get_num_rounds::<C>(c);
@@ -323,7 +300,7 @@ impl SharedRoundData {
         // This way the we don't need to reallocate memory for each msm with
         // a different configuration (different number of points or different bucket
         // width)
-        let mut rounds: Vec<RoundData> = Vec::with_capacity(num_rounds);
+        let mut rounds: Vec<RoundData<'_>> = Vec::with_capacity(num_rounds);
         for _ in 0..num_rounds {
             let (bucket_sizes, rest) = bucket_sizes_rest.split_at_mut(num_buckets);
             bucket_sizes_rest = rest;
@@ -377,31 +354,49 @@ impl<T> ThreadBox<T> {
     }
 }
 
-fn calculate_wnafs<C: AffineCurve>(coeffs: &[C::Scalar], wnafs: &mut [u32], c: usize) {
-    let num_threads = multicore::current_num_threads();
-    let num_points = coeffs.len() * 2;
+#[cfg(feature = "parallel")]
+fn calculate_wnafs<C: AffineCurve>(
+    coeffs: &[<C::ScalarField as PrimeField>::BigInt],
+    wnafs: &mut [u32],
+    c: usize,
+) {
+    let num_threads = current_num_threads();
+    let num_points = coeffs.len();
     let num_rounds = get_num_rounds::<C>(c);
     let w = c + 1;
 
-    let start = start_measure("calculate wnafs".to_string(), false);
+    let start = super::start_measure("calculate wnafs".to_string(), false);
     let mut wnafs_box = ThreadBox::wrap(wnafs);
     let chunk_size = div_up(coeffs.len(), num_threads);
-    multicore::scope(|scope| {
+    scope(|scope| {
         for (thread_idx, coeffs) in coeffs.chunks(chunk_size).enumerate() {
             scope.spawn(move |_| {
-                let wnafs = &mut wnafs_box.unwrap()[thread_idx * chunk_size * 2..];
+                let wnafs = &mut wnafs_box.unwrap()[thread_idx * chunk_size..];
                 for (idx, coeff) in coeffs.iter().enumerate() {
-                    let (p0, p1) = C::get_endomorphism_scalars(coeff);
-                    get_wnaf(p0, w, num_rounds, &mut wnafs[idx * 2..], num_points);
-                    get_wnaf(p1, w, num_rounds, &mut wnafs[idx * 2 + 1..], num_points);
+                    let p: &[u64] = coeff.as_ref();
+                    // hehe, fix it
+                    get_wnaf(
+                        p[0] as u128,
+                        w,
+                        num_rounds,
+                        &mut wnafs[idx * 2..],
+                        num_points,
+                    );
+                    get_wnaf(
+                        p[2] as u128,
+                        w,
+                        num_rounds,
+                        &mut wnafs[idx * 2 + 1..],
+                        num_points,
+                    );
                 }
             });
         }
     });
-    stop_measure(start);
+    super::stop_measure(start);
 }
 
-fn radix_sort(wnafs: &mut [u32], round: &mut RoundData) {
+fn radix_sort(wnafs: &mut [u32], round: &mut RoundData<'_>) {
     let bucket_sizes = &mut round.bucket_sizes;
     let bucket_offsets = &mut round.bucket_offsets;
 
@@ -438,20 +433,21 @@ fn radix_sort(wnafs: &mut [u32], round: &mut RoundData) {
 }
 
 /// Sorts the points so they are grouped per bucket
-fn sort<C: AffineCurve>(wnafs: &mut [u32], rounds: &mut [RoundData], c: usize) {
+#[cfg(feature = "parallel")]
+fn sort<C: AffineCurve>(wnafs: &mut [u32], rounds: &mut [RoundData<'_>], c: usize) {
     let num_rounds = get_num_rounds::<C>(c);
     let num_points = wnafs.len() / num_rounds;
 
     // Sort per bucket for each round separately
-    let start = start_measure("radix sort".to_string(), false);
-    multicore::scope(|scope| {
+    let start = super::start_measure("radix sort".to_string(), false);
+    scope(|scope| {
         for (round, wnafs) in rounds.chunks_mut(1).zip(wnafs.chunks_mut(num_points)) {
             scope.spawn(move |_| {
                 radix_sort(wnafs, &mut round[0]);
             });
         }
     });
-    stop_measure(start);
+    super::stop_measure(start);
 }
 
 /// Creates the addition tree.
@@ -461,7 +457,7 @@ fn sort<C: AffineCurve>(wnafs: &mut [u32], rounds: &mut [RoundData], c: usize) {
 /// make sure that on each level we have an even number of points for each
 /// level. Odd points are added to lower levels where the length of the addition
 /// results is odd (which then makes the length even).
-fn process_addition_tree<const PREPROCESS: bool>(round: &mut RoundData) {
+fn process_addition_tree<const PREPROCESS: bool>(round: &mut RoundData<'_>) {
     let num_levels = round.num_levels;
     let bucket_sizes = &round.bucket_sizes;
     let point_data = &round.point_data;
@@ -546,13 +542,12 @@ fn process_addition_tree<const PREPROCESS: bool>(round: &mut RoundData) {
                             if first_level {
                                 state = State::OddPoint(point_idx + size - 1);
                             } else {
-                                println!("hehe");
-                                // chao: else will never happen because we
+                                std::println!("ops, something goes wrong");
+                                // chao: else should never happen because we
                                 // always make next level even after addition
-                                //  state = State::OddResult(
-                                //     (level_offset[level] + level_sizes[level]
-                                // + size) >> 1,
-                                // );
+                                state = State::OddResult(
+                                    (level_offset[level] + level_sizes[level] + size) >> 1,
+                                );
                             }
                         } else {
                             // Just mark it as odd, we won't use the actual value anywhere
@@ -645,9 +640,10 @@ fn process_addition_tree<const PREPROCESS: bool>(round: &mut RoundData) {
 /// on each level of the tree, writing the result of the addition to a lower
 /// level. Each level thus contains independent point additions, with only
 /// requiring a single inversion per level in the tree.
-fn create_addition_trees(rounds: &mut [RoundData]) {
-    let start = start_measure("create addition trees".to_string(), false);
-    multicore::scope(|scope| {
+#[cfg(feature = "parallel")]
+fn create_addition_trees(rounds: &mut [RoundData<'_>]) {
+    let start = super::start_measure("create addition trees".to_string(), false);
+    scope(|scope| {
         for round in rounds.chunks_mut(1) {
             scope.spawn(move |_| {
                 // Collect tree levels sizes
@@ -657,20 +653,21 @@ fn create_addition_trees(rounds: &mut [RoundData]) {
             });
         }
     });
-    stop_measure(start);
+    super::stop_measure(start);
 }
 
 /// Here we write the odd points in odd length buckets (the other points are
 /// loaded on the fly). This will do random reads AND random writes, which is
 /// normally terrible for performance. Luckily this doesn't really matter
 /// because we only have to write at most num_buckets points.
-fn do_point_scatter<C: AffineCurve>(round: &RoundData, bases: &[C], points: &mut [C]) {
-    let num_threads = multicore::current_num_threads();
+#[cfg(feature = "parallel")]
+fn do_point_scatter<C: AffineCurve>(round: &RoundData<'_>, bases: &[C], points: &mut [C]) {
+    let num_threads = current_num_threads();
     let scatter_map = &round.scatter_map[..round.scatter_map_len];
     let mut points_box = ThreadBox::wrap(points);
-    let start = start_measure("point scatter".to_string(), false);
+    let start = super::start_measure("point scatter".to_string(), false);
     if !scatter_map.is_empty() {
-        multicore::scope(|scope| {
+        scope(|scope| {
             let num_copies_per_thread = div_up(scatter_map.len(), num_threads);
             for scatter_map in scatter_map.chunks(num_copies_per_thread) {
                 scope.spawn(move |_| {
@@ -689,17 +686,18 @@ fn do_point_scatter<C: AffineCurve>(round: &RoundData, bases: &[C], points: &mut
             }
         });
     }
-    stop_measure(start);
+    super::stop_measure(start);
 }
 
 /// Finally do all additions using the addition tree we've setup.
+#[cfg(feature = "parallel")]
 fn do_batch_additions<C: AffineCurve>(
-    round: &RoundData,
+    round: &RoundData<'_>,
     bases: &[C],
     points: &mut [C],
     complete: bool,
 ) {
-    let num_threads = multicore::current_num_threads();
+    let num_threads = current_num_threads();
 
     let num_levels = round.num_levels;
     let level_counter = &round.level_sizes;
@@ -708,11 +706,11 @@ fn do_batch_additions<C: AffineCurve>(
     let base_positions = &round.base_positions;
     let mut points_box = ThreadBox::wrap(points);
 
-    let start = start_measure("batch additions".to_string(), false);
+    let start = super::start_measure("batch additions".to_string(), false);
     for i in 0..num_levels - 1 {
         let start = level_offset[i];
         let num_points = level_counter[i];
-        multicore::scope(|scope| {
+        scope(|scope| {
             // We have to make sure we have an even amount here so we don't split within a
             // pair
             let num_points_per_thread = div_up(num_points / 2, num_threads) * 2;
@@ -779,23 +777,28 @@ fn do_batch_additions<C: AffineCurve>(
             }
         });
     }
-    stop_measure(start);
+    super::stop_measure(start);
 }
 
 /// Accumulate all bucket results to get the result of the round
-fn accumulate_buckets<C: AffineCurve>(round: &RoundData, points: &mut [C], c: usize) -> C::Curve {
-    let num_threads = multicore::current_num_threads();
+#[cfg(feature = "parallel")]
+fn accumulate_buckets<C: AffineCurve>(
+    round: &RoundData<'_>,
+    points: &mut [C],
+    c: usize,
+) -> C::Projective {
+    let num_threads = current_num_threads();
     let num_buckets = get_num_buckets(c);
 
     let num_levels = round.num_levels;
     let bucket_sizes = &round.bucket_sizes;
     let level_offset = &round.level_offset;
 
-    let start_time = start_measure("accumulate buckets".to_string(), false);
+    let start_time = super::start_measure("accumulate buckets".to_string(), false);
     let start = level_offset[num_levels - 1];
     let buckets = &mut points[start..(start + num_buckets)];
-    let mut results: Vec<C::Curve> = vec![C::Curve::identity(); num_threads];
-    multicore::scope(|scope| {
+    let mut results: Vec<C::Projective> = vec![C::Projective::zero(); num_threads];
+    scope(|scope| {
         let chunk_size = num_buckets / num_threads;
         for (thread_idx, ((bucket_sizes, buckets), result)) in bucket_sizes[1..]
             .chunks(chunk_size)
@@ -806,11 +809,11 @@ fn accumulate_buckets<C: AffineCurve>(round: &RoundData, points: &mut [C], c: us
             scope.spawn(move |_| {
                 // Accumulate all bucket results
                 let num_buckets_thread = bucket_sizes.len();
-                let mut acc = C::Curve::identity();
-                let mut running_sum = C::Curve::identity();
+                let mut acc = C::Projective::zero();
+                let mut running_sum = C::Projective::zero();
                 for b in (0..num_buckets_thread).rev() {
                     if bucket_sizes[b] > 0 {
-                        running_sum = running_sum + buckets[b];
+                        running_sum.add_assign_mixed(&buckets[b]);
                     }
                     acc = acc + &running_sum;
                 }
@@ -819,7 +822,7 @@ fn accumulate_buckets<C: AffineCurve>(round: &RoundData, points: &mut [C], c: us
                 // so correct for that here
                 let bucket_start = thread_idx * chunk_size;
                 let num_bits = num_bits(bucket_start);
-                let mut accumulator = C::Curve::identity();
+                let mut accumulator = C::Projective::zero();
                 for idx in (0..num_bits).rev() {
                     accumulator = accumulator.double();
                     if (bucket_start >> idx) & 1 != 0 {
@@ -833,10 +836,10 @@ fn accumulate_buckets<C: AffineCurve>(round: &RoundData, points: &mut [C], c: us
             });
         }
     });
-    stop_measure(start_time);
+    super::stop_measure(start_time);
 
     // Add the results of all threads together
     results
         .iter()
-        .fold(C::Curve::identity(), |acc, result| acc + result)
+        .fold(C::Projective::zero(), |acc, result| acc + result)
 }
