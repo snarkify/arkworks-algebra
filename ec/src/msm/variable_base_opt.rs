@@ -717,9 +717,10 @@ fn accumulate_buckets<C: AffineCurve>(
         .into_iter()
         .zip(buckets)
         .rev()
-        .filter(|(bz, _)| **bz > 0)
-        .for_each(|(_, b)| {
-            running_sum.add_assign_mixed(b);
+        .for_each(|(bz, b)| {
+            if *bz > 0 {
+                running_sum.add_assign_mixed(b);
+            }
             res += &running_sum;
         });
     super::stop_measure(start_time);
