@@ -454,6 +454,7 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
             points[out_idx].x = points[i + 1].y.square() - points[out_idx].x;
             // y_3 = lambda * (x_1 - x_3) - y_1
             points[out_idx].y = points[i + 1].y * (points[i].x - points[out_idx].x) - points[i].y;
+            points[out_idx].infinity = false;
         }
     }
 }
