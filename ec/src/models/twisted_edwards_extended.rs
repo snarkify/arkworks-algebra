@@ -151,13 +151,14 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
     }
 
     fn batch_add<const COMPLETE: bool, const LOAD_POINTS: bool>(
-        points: &mut [Self],
-        output_indices: &[u32],
-        num_points: usize,
-        offset: usize,
-        bases: &[Self],
-        base_positions: &[u32],
+        _points: &mut [Self],
+        _output_indices: &[u32],
+        _num_points: usize,
+        _offset: usize,
+        _bases: &[Self],
+        _base_positions: &[u32],
     ) {
+        panic!("batch_add not implemented for twisted edwards model")
     }
 }
 

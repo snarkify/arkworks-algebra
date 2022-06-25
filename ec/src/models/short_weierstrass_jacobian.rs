@@ -207,7 +207,6 @@ impl<P: Parameters> GroupAffine<P> {
             let res = pts.into_iter().fold(Self::zero(), |acc, pt| acc + pt);
             return res;
         }
-        let n = pts.len();
         let left = &pts[0..pts.len() / 2];
         let right = &pts[pts.len() / 2..pts.len()];
         let middle = Self::batch_affine_pair_addition(left, right);

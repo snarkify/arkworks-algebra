@@ -1,7 +1,6 @@
 use crate::{ark_std::string::ToString, msm::stop_measure};
 use ark_ff::prelude::*;
 use ark_std::vec::Vec;
-use core::{num, ops::AddAssign, slice};
 
 use crate::{AffineCurve, ProjectiveCurve};
 
@@ -18,7 +17,7 @@ fn get_wnaf_size_bits(num_bits: usize, w: usize) -> usize {
 }
 
 fn get_wnaf_size<C: AffineCurve>(w: usize) -> usize {
-    let lambda = <C::ScalarField as PrimeField>::Params::MODULUS_BITS;
+    let lambda = <C::ScalarField as PrimeField>::MODULUS_BIT_SIZE;
     get_wnaf_size_bits(lambda as usize, w)
 }
 
@@ -512,7 +511,7 @@ fn process_addition_tree<const PREPROCESS: bool>(round: &mut RoundData<'_>) {
                             if first_level {
                                 state = State::OddPoint(point_idx + size - 1);
                             } else {
-                                std::println!("ops, something goes wrong");
+                                // std::println!("ops, something goes wrong");
                                 // chao: else should never happen because we
                                 // always make next level even after addition
                                 state = State::OddResult(
