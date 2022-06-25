@@ -22,13 +22,15 @@ use zeroize::Zeroize;
 
 use ark_ff::{
     bytes::{FromBytes, ToBytes},
-    fields::{BitIteratorBE, Field, PrimeField, SquareRootField},
+    fields::{Field, PrimeField, SquareRootField},
     ToConstraintField, UniformRand,
 };
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
+/// Affine coordinates for a point on a twisted Edwards curve, over the
+/// base field `P::BaseField`.
 #[derive(Derivative)]
 #[derivative(
     Copy(bound = "P: Parameters"),
@@ -40,7 +42,9 @@ use rayon::prelude::*;
 )]
 #[must_use]
 pub struct GroupAffine<P: Parameters> {
+    /// X coordinate of the point represented as a field element
     pub x: P::BaseField,
+    /// Y coordinate of the point represented as a field element
     pub y: P::BaseField,
 }
 
@@ -55,41 +59,32 @@ impl<P: Parameters> GroupAffine<P> {
         Self { x, y }
     }
 
-    #[must_use]
-    pub fn scale_by_cofactor(&self) -> <Self as AffineCurve>::Projective {
-        self.mul_bits(BitIteratorBE::new(P::COFACTOR))
-    }
-
-    /// Multiplies `self` by the scalar represented by `bits`. `bits` must be a
-    /// big-endian bit-wise decomposition of the scalar.
-    pub(crate) fn mul_bits(&self, bits: impl Iterator<Item = bool>) -> GroupProjective<P> {
-        let mut res = GroupProjective::zero();
-        for i in bits.skip_while(|b| !b) {
-            res.double_in_place();
-            if i {
-                res.add_assign_mixed(&self)
-            }
-        }
-        res
-    }
-
-    /// Attempts to construct an affine point given an x-coordinate. The
+    /// Attempts to construct an affine point given an y-coordinate. The
     /// point is not guaranteed to be in the prime order subgroup.
     ///
     /// If and only if `greatest` is set will the lexicographically
-    /// largest y-coordinate be selected.
+    /// largest x-coordinate be selected.
+    ///
+    /// a * X^2 + Y^2 = 1 + d * X^2 * Y^2
+    /// a * X^2 - d * X^2 * Y^2 = 1 - Y^2
+    /// X^2 * (a - d * Y^2) = 1 - Y^2
+    /// X^2 = (1 - Y^2) / (a - d * Y^2)
     #[allow(dead_code)]
-    pub fn get_point_from_x(x: P::BaseField, greatest: bool) -> Option<Self> {
-        let x2 = x.square();
-        let one = P::BaseField::one();
-        let numerator = P::mul_by_a(&x2) - &one;
-        let denominator = P::COEFF_D * &x2 - &one;
-        let y2 = denominator.inverse().map(|denom| denom * &numerator);
-        y2.and_then(|y2| y2.sqrt()).map(|y| {
-            let negy = -y;
-            let y = if (y < negy) ^ greatest { y } else { negy };
-            Self::new(x, y)
-        })
+    pub fn get_point_from_y(y: P::BaseField, greatest: bool) -> Option<Self> {
+        let y2 = y.square();
+
+        let numerator = P::BaseField::one() - y2;
+        let denominator = P::COEFF_A - (y2 * P::COEFF_D);
+
+        denominator
+            .inverse()
+            .map(|denom| denom * &numerator)
+            .and_then(|x2| x2.sqrt())
+            .map(|x| {
+                let negx = -x;
+                let x = if (x < negx) ^ greatest { x } else { negx };
+                Self::new(x, y)
+            })
     }
 
     /// Checks that the current point is on the elliptic curve.
@@ -102,12 +97,13 @@ impl<P: Parameters> GroupAffine<P> {
 
         lhs == rhs
     }
+}
 
-    /// Checks that the current point is in the prime order subgroup given
-    /// the point on the curve.
+impl<P: Parameters> GroupAffine<P> {
+    /// Checks if `self` is in the subgroup having order equaling that of
+    /// `P::ScalarField` given it is on the curve.
     pub fn is_in_correct_subgroup_assuming_on_curve(&self) -> bool {
-        self.mul_bits(BitIteratorBE::new(P::ScalarField::characteristic()))
-            .is_zero()
+        P::is_in_correct_subgroup_assuming_on_curve(self)
     }
 }
 
@@ -122,7 +118,7 @@ impl<P: Parameters> Zero for GroupAffine<P> {
 }
 
 impl<P: Parameters> AffineCurve for GroupAffine<P> {
-    const COFACTOR: &'static [u64] = P::COFACTOR;
+    type Parameters = P;
     type BaseField = P::BaseField;
     type ScalarField = P::ScalarField;
     type Projective = GroupProjective<P>;
@@ -131,29 +127,27 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
         Self::new(P::AFFINE_GENERATOR_COEFFS.0, P::AFFINE_GENERATOR_COEFFS.1)
     }
 
-    fn mul<S: Into<<Self::ScalarField as PrimeField>::BigInt>>(&self, by: S) -> GroupProjective<P> {
-        self.mul_bits(BitIteratorBE::new(by.into()))
-    }
-
     fn from_random_bytes(bytes: &[u8]) -> Option<Self> {
-        P::BaseField::from_random_bytes_with_flags::<EdwardsFlags>(bytes).and_then(|(x, flags)| {
-            // if x is valid and is zero, then parse this
+        P::BaseField::from_random_bytes_with_flags::<EdwardsFlags>(bytes).and_then(|(y, flags)| {
+            // if y is valid and is zero, then parse this
             // point as infinity.
-            if x.is_zero() {
+            if y.is_zero() {
                 Some(Self::zero())
             } else {
-                Self::get_point_from_x(x, flags.is_positive())
+                Self::get_point_from_y(y, flags.is_positive())
             }
         })
     }
 
-    #[inline]
-    fn mul_by_cofactor_to_projective(&self) -> Self::Projective {
-        self.scale_by_cofactor()
+    fn mul<S: Into<<Self::ScalarField as PrimeField>::BigInt>>(&self, by: S) -> Self::Projective {
+        P::mul_affine(self, by.into().as_ref())
     }
 
-    fn mul_by_cofactor_inv(&self) -> Self {
-        self.mul(P::COFACTOR_INV).into()
+    /// Multiplies this element by the cofactor and output the
+    /// resulting projective element.
+    #[must_use]
+    fn mul_by_cofactor_to_projective(&self) -> Self::Projective {
+        P::mul_affine(self, Self::Parameters::COFACTOR)
     }
 
     fn batch_add<const COMPLETE: bool, const LOAD_POINTS: bool>(
@@ -229,7 +223,7 @@ impl<'a, P: Parameters> SubAssign<&'a Self> for GroupAffine<P> {
 
 impl<P: Parameters> MulAssign<P::ScalarField> for GroupAffine<P> {
     fn mul_assign(&mut self, other: P::ScalarField) {
-        *self = self.mul(other.into_repr()).into()
+        *self = self.mul(other.into_bigint()).into()
     }
 }
 
@@ -261,11 +255,11 @@ impl<P: Parameters> Distribution<GroupAffine<P>> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> GroupAffine<P> {
         loop {
-            let x = P::BaseField::rand(rng);
+            let y = P::BaseField::rand(rng);
             let greatest = rng.gen();
 
-            if let Some(p) = GroupAffine::get_point_from_x(x, greatest) {
-                return p.scale_by_cofactor().into();
+            if let Some(p) = GroupAffine::get_point_from_y(y, greatest) {
+                return p.mul_by_cofactor();
             }
         }
     }
@@ -360,11 +354,11 @@ impl<P: Parameters> Distribution<GroupProjective<P>> for Standard {
     #[inline]
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> GroupProjective<P> {
         loop {
-            let x = P::BaseField::rand(rng);
+            let y = P::BaseField::rand(rng);
             let greatest = rng.gen();
 
-            if let Some(p) = GroupAffine::get_point_from_x(x, greatest) {
-                return p.scale_by_cofactor();
+            if let Some(p) = GroupAffine::get_point_from_y(y, greatest) {
+                return p.mul_by_cofactor_to_projective();
             }
         }
     }
@@ -430,7 +424,7 @@ impl<P: Parameters> Zero for GroupProjective<P> {
 }
 
 impl<P: Parameters> ProjectiveCurve for GroupProjective<P> {
-    const COFACTOR: &'static [u64] = P::COFACTOR;
+    type Parameters = P;
     type BaseField = P::BaseField;
     type ScalarField = P::ScalarField;
     type Affine = GroupAffine<P>;
@@ -531,6 +525,11 @@ impl<P: Parameters> ProjectiveCurve for GroupProjective<P> {
         // Z3 = F*G
         self.z = f * &g;
     }
+
+    #[inline]
+    fn mul<S: AsRef<[u64]>>(self, other: S) -> Self {
+        P::mul_projective(&self, other.as_ref())
+    }
 }
 
 impl<P: Parameters> Neg for GroupProjective<P> {
@@ -612,7 +611,7 @@ impl<'a, P: Parameters> SubAssign<&'a Self> for GroupProjective<P> {
 
 impl<P: Parameters> MulAssign<P::ScalarField> for GroupProjective<P> {
     fn mul_assign(&mut self, other: P::ScalarField) {
-        *self = self.mul(other.into_repr())
+        *self = self.mul(other.into_bigint())
     }
 }
 
@@ -714,8 +713,8 @@ impl<P: Parameters> CanonicalSerialize for GroupAffine<P> {
             // Serialize 0.
             P::BaseField::zero().serialize_with_flags(writer, flags)
         } else {
-            let flags = EdwardsFlags::from_y_sign(self.y > -self.y);
-            self.x.serialize_with_flags(writer, flags)
+            let flags = EdwardsFlags::from_x_sign(self.x > -self.x);
+            self.y.serialize_with_flags(writer, flags)
         }
     }
 
@@ -770,12 +769,12 @@ impl<P: Parameters> CanonicalSerialize for GroupProjective<P> {
 impl<P: Parameters> CanonicalDeserialize for GroupAffine<P> {
     #[allow(unused_qualifications)]
     fn deserialize<R: Read>(mut reader: R) -> Result<Self, SerializationError> {
-        let (x, flags): (P::BaseField, EdwardsFlags) =
+        let (y, flags): (P::BaseField, EdwardsFlags) =
             CanonicalDeserializeWithFlags::deserialize_with_flags(&mut reader)?;
-        if x == P::BaseField::zero() {
+        if y == P::BaseField::zero() {
             Ok(Self::zero())
         } else {
-            let p = GroupAffine::<P>::get_point_from_x(x, flags.is_positive())
+            let p = GroupAffine::<P>::get_point_from_y(y, flags.is_positive())
                 .ok_or(SerializationError::InvalidData)?;
             if !p.is_in_correct_subgroup_assuming_on_curve() {
                 return Err(SerializationError::InvalidData);
@@ -844,5 +843,131 @@ where
     #[inline]
     fn to_field_elements(&self) -> Option<Vec<ConstraintF>> {
         GroupAffine::from(*self).to_field_elements()
+    }
+}
+
+// This impl block and the one following are being used to encapsulate all of
+// the methods that are needed for backwards compatibility with the old
+// serialization format
+// See Issue #330
+impl<P: Parameters> GroupAffine<P> {
+    /// Attempts to construct an affine point given an x-coordinate. The
+    /// point is not guaranteed to be in the prime order subgroup.
+    ///
+    /// If and only if `greatest` is set will the lexicographically
+    /// largest y-coordinate be selected.
+    ///
+    /// This method is implemented for backwards compatibility with the old
+    /// serialization format and will be deprecated and then removed in a
+    /// future version.
+    #[allow(dead_code)]
+    pub fn get_point_from_x_old(x: P::BaseField, greatest: bool) -> Option<Self> {
+        let x2 = x.square();
+        let one = P::BaseField::one();
+        let numerator = P::mul_by_a(&x2) - &one;
+        let denominator = P::COEFF_D * &x2 - &one;
+        let y2 = denominator.inverse().map(|denom| denom * &numerator);
+        y2.and_then(|y2| y2.sqrt()).map(|y| {
+            let negy = -y;
+            let y = if (y < negy) ^ greatest { y } else { negy };
+            Self::new(x, y)
+        })
+    }
+    /// This method is implemented for backwards compatibility with the old
+    /// serialization format and will be deprecated and then removed in a
+    /// future version.
+    pub fn serialize_old<W: Write>(&self, writer: W) -> Result<(), SerializationError> {
+        if self.is_zero() {
+            let flags = EdwardsFlags::default();
+            // Serialize 0.
+            P::BaseField::zero().serialize_with_flags(writer, flags)
+        } else {
+            // Note: although this says `from_x_sign` and we are
+            // using the sign of `y`. The logic works the same.
+            let flags = EdwardsFlags::from_x_sign(self.y > -self.y);
+            self.x.serialize_with_flags(writer, flags)
+        }
+    }
+
+    #[allow(unused_qualifications)]
+    #[inline]
+    /// This method is implemented for backwards compatibility with the old
+    /// serialization format and will be deprecated and then removed in a
+    /// future version.
+    pub fn serialize_uncompressed_old<W: Write>(
+        &self,
+        mut writer: W,
+    ) -> Result<(), SerializationError> {
+        self.x.serialize_uncompressed(&mut writer)?;
+        self.y.serialize_uncompressed(&mut writer)?;
+        Ok(())
+    }
+
+    #[allow(unused_qualifications)]
+    /// This method is implemented for backwards compatibility with the old
+    /// serialization format and will be deprecated and then removed in a
+    /// future version.
+    pub fn deserialize_uncompressed_old<R: Read>(reader: R) -> Result<Self, SerializationError> {
+        let p = Self::deserialize_unchecked(reader)?;
+
+        if !p.is_in_correct_subgroup_assuming_on_curve() {
+            return Err(SerializationError::InvalidData);
+        }
+        Ok(p)
+    }
+    /// This method is implemented for backwards compatibility with the old
+    /// serialization format and will be deprecated and then removed in a
+    /// future version.
+    pub fn deserialize_old<R: Read>(mut reader: R) -> Result<Self, SerializationError> {
+        let (x, flags): (P::BaseField, EdwardsFlags) =
+            CanonicalDeserializeWithFlags::deserialize_with_flags(&mut reader)?;
+        if x == P::BaseField::zero() {
+            Ok(Self::zero())
+        } else {
+            let p = GroupAffine::<P>::get_point_from_x_old(x, flags.is_positive())
+                .ok_or(SerializationError::InvalidData)?;
+            if !p.is_in_correct_subgroup_assuming_on_curve() {
+                return Err(SerializationError::InvalidData);
+            }
+            Ok(p)
+        }
+    }
+}
+impl<P: Parameters> GroupProjective<P> {
+    /// This method is implemented for backwards compatibility with the old
+    /// serialization format and will be deprecated and then removed in a
+    /// future version.
+    pub fn serialize_old<W: Write>(&self, writer: W) -> Result<(), SerializationError> {
+        let aff = GroupAffine::<P>::from(self.clone());
+        aff.serialize_old(writer)
+    }
+
+    #[allow(unused_qualifications)]
+    #[inline]
+    /// This method is implemented for backwards compatibility with the old
+    /// serialization format and will be deprecated and then removed in a
+    /// future version.
+    pub fn serialize_uncompressed_old<W: Write>(
+        &self,
+        writer: W,
+    ) -> Result<(), SerializationError> {
+        let aff = GroupAffine::<P>::from(self.clone());
+        aff.serialize_uncompressed(writer)
+    }
+
+    #[allow(unused_qualifications)]
+    /// This method is implemented for backwards compatibility with the old
+    /// serialization format and will be deprecated and then removed in a
+    /// future version.
+    pub fn deserialize_uncompressed_old<R: Read>(reader: R) -> Result<Self, SerializationError> {
+        let aff = GroupAffine::<P>::deserialize_uncompressed(reader)?;
+        Ok(aff.into())
+    }
+    /// This method is implemented for backwards compatibility with the old
+    /// serialization format and will be deprecated and then removed in a
+    /// future version.
+    pub fn deserialize_old<R: Read>(reader: R) -> Result<Self, SerializationError> {
+        let aff = GroupAffine::<P>::deserialize_old(reader)?;
+        Ok(aff.into())
     }
 }

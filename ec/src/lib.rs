@@ -1,5 +1,11 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-#![warn(unused, future_incompatible, nonstandard_style, rust_2018_idioms)]
+#![warn(
+    unused,
+    future_incompatible,
+    nonstandard_style,
+    rust_2018_idioms,
+    rust_2021_compatibility
+)]
 #![allow(
     clippy::op_ref,
     clippy::suspicious_op_assign_impl,
@@ -13,9 +19,6 @@ extern crate derivative;
 #[macro_use]
 extern crate ark_std;
 
-extern crate std;
-
-use crate::group::Group;
 use ark_ff::{
     bytes::{FromBytes, ToBytes},
     fields::{Field, PrimeField, SquareRootField},
@@ -40,8 +43,13 @@ pub mod group;
 
 pub mod msm;
 
+/// Provides a `HashToCurve` trait and implementations of this trait via
+/// different hashing strategies.
+pub mod hashing;
 pub mod wnaf;
 
+/// Collection of types (mainly fields and curves) that together describe
+/// how to compute a pairing over a pairing-friendly curve.
 pub trait PairingEngine: Sized + 'static + Copy + Debug + Sync + Send + Eq + PartialEq {
     /// This is the scalar field of the G1/G2 groups.
     type Fr: PrimeField + SquareRootField;
@@ -152,11 +160,15 @@ pub trait ProjectiveCurve:
     + for<'a> core::iter::Sum<&'a Self>
     + From<<Self as ProjectiveCurve>::Affine>
 {
-    const COFACTOR: &'static [u64];
+    type Parameters: ModelParameters<ScalarField = Self::ScalarField, BaseField = Self::BaseField>;
     type ScalarField: PrimeField + SquareRootField;
     type BaseField: Field;
-    type Affine: AffineCurve<Projective = Self, ScalarField = Self::ScalarField, BaseField = Self::BaseField>
-        + From<Self>
+    type Affine: AffineCurve<
+            Parameters = Self::Parameters,
+            Projective = Self,
+            ScalarField = Self::ScalarField,
+            BaseField = Self::BaseField,
+        > + From<Self>
         + Into<Self>;
 
     /// Returns a fixed generator of unknown exponent.
@@ -208,18 +220,7 @@ pub trait ProjectiveCurve:
     fn add_assign_mixed(&mut self, other: &Self::Affine);
 
     /// Performs scalar multiplication of this element.
-    fn mul<S: AsRef<[u64]>>(mut self, other: S) -> Self {
-        let mut res = Self::zero();
-        for b in ark_ff::BitIteratorBE::without_leading_zeros(other) {
-            res.double_in_place();
-            if b {
-                res += self;
-            }
-        }
-
-        self = res;
-        self
-    }
+    fn mul<S: AsRef<[u64]>>(self, other: S) -> Self;
 }
 
 /// Affine representation of an elliptic curve point guaranteed to be
@@ -248,11 +249,22 @@ pub trait AffineCurve:
     + for<'a> core::iter::Sum<&'a Self>
     + From<<Self as AffineCurve>::Projective>
 {
-    const COFACTOR: &'static [u64];
+    type Parameters: ModelParameters<ScalarField = Self::ScalarField, BaseField = Self::BaseField>;
+
+    /// The group defined by this curve has order `h * r` where `r` is a large
+    /// prime. `Self::ScalarField` is the prime field defined by `r`
     type ScalarField: PrimeField + SquareRootField + Into<<Self::ScalarField as PrimeField>::BigInt>;
+
+    /// The finite field over which this curve is defined.
     type BaseField: Field;
-    type Projective: ProjectiveCurve<Affine = Self, ScalarField = Self::ScalarField, BaseField = Self::BaseField>
-        + From<Self>
+
+    /// The projective representation of points on this curve.
+    type Projective: ProjectiveCurve<
+            Parameters = Self::Parameters,
+            Affine = Self,
+            ScalarField = Self::ScalarField,
+            BaseField = Self::BaseField,
+        > + From<Self>
         + Into<Self>
         + MulAssign<Self::ScalarField>; // needed due to https://github.com/rust-lang/rust/issues/69640
 
@@ -272,8 +284,7 @@ pub trait AffineCurve:
 
     /// Performs scalar multiplication of this element with mixed addition.
     #[must_use]
-    fn mul<S: Into<<Self::ScalarField as PrimeField>::BigInt>>(&self, other: S)
-        -> Self::Projective;
+    fn mul<S: Into<<Self::ScalarField as PrimeField>::BigInt>>(&self, by: S) -> Self::Projective;
 
     /// Multiplies this element by the cofactor and output the
     /// resulting projective element.
@@ -289,7 +300,9 @@ pub trait AffineCurve:
     /// Multiplies this element by the inverse of the cofactor in
     /// `Self::ScalarField`.
     #[must_use]
-    fn mul_by_cofactor_inv(&self) -> Self;
+    fn mul_by_cofactor_inv(&self) -> Self {
+        self.mul(Self::Parameters::COFACTOR_INV).into()
+    }
 
     /// Batched point addition.
     /// If COMPLETE is set to false the points need to be linearly independent.
@@ -303,7 +316,7 @@ pub trait AffineCurve:
     );
 }
 
-impl<C: ProjectiveCurve> Group for C {
+impl<C: ProjectiveCurve> crate::group::Group for C {
     type ScalarField = C::ScalarField;
 
     #[inline]
@@ -332,6 +345,9 @@ pub fn prepare_g2<E: PairingEngine>(g: impl Into<E::G2Affine>) -> E::G2Prepared 
     E::G2Prepared::from(g)
 }
 
+/// Wrapper trait representing a cycle of elliptic curves (E1, E2) such that
+/// the base field of E1 is the scalar field of E2, and the scalar field of E1
+/// is the base field of E2.
 pub trait CurveCycle
 where
     <Self::E1 as AffineCurve>::Projective: MulAssign<<Self::E2 as AffineCurve>::BaseField>,
@@ -344,6 +360,7 @@ where
     type E2: AffineCurve;
 }
 
+/// A cycle of curves where both curves are pairing-friendly.
 pub trait PairingFriendlyCycle: CurveCycle {
     type Engine1: PairingEngine<
         G1Affine = Self::E1,
