@@ -214,7 +214,7 @@ impl<C: AffineCurve> MultiExp<C> {
 
         // Get the bases for the coefficients
         assert!(coeffs.len() == self.bases.len());
-        let start = super::start_measure("msm".to_string(), false);
+        //let start = super::start_measure("msm".to_string(), false);
         let bases = &self.bases[..coeffs.len()];
         if coeffs.len() >= 16 {
             let num_points = coeffs.len();
@@ -251,7 +251,7 @@ impl<C: AffineCurve> MultiExp<C> {
                         }
                         total
                     });
-            stop_measure(start);
+            //stop_measure(start);
             res
         } else {
             // Just do a naive msm
@@ -259,7 +259,7 @@ impl<C: AffineCurve> MultiExp<C> {
             for (idx, coeff) in coeffs.iter().enumerate() {
                 acc += bases[idx].into_projective().mul(*coeff);
             }
-            stop_measure(start);
+            //stop_measure(start);
             acc
         }
     }
@@ -363,11 +363,11 @@ fn calculate_wnafs<C: AffineCurve>(
     let num_rounds = get_num_rounds::<C>(c);
     let w = c + 1;
 
-    let start = super::start_measure("calculate wnafs".to_string(), false);
+    //let start = super::start_measure("calculate wnafs".to_string(), false);
     for (idx, coeff) in coeffs.iter().enumerate() {
         get_wnaf::<C>(coeff, w, num_rounds, &mut wnafs[idx..], num_points);
     }
-    super::stop_measure(start);
+    //super::stop_measure(start);
 }
 
 fn radix_sort(wnafs: &mut [u32], round: &mut RoundData<'_>) {
@@ -412,11 +412,11 @@ fn sort<C: AffineCurve>(wnafs: &mut [u32], rounds: &mut [RoundData<'_>], c: usiz
     let num_points = wnafs.len() / num_rounds;
 
     // Sort per bucket for each round separately
-    let start = super::start_measure("radix sort".to_string(), false);
+    //let start = super::start_measure("radix sort".to_string(), false);
     for (round, wnafs) in rounds.chunks_mut(1).zip(wnafs.chunks_mut(num_points)) {
         radix_sort(wnafs, &mut round[0]);
     }
-    super::stop_measure(start);
+    //super::stop_measure(start);
 }
 
 /// Creates the addition tree.
@@ -610,14 +610,14 @@ fn process_addition_tree<const PREPROCESS: bool>(round: &mut RoundData<'_>) {
 /// level. Each level thus contains independent point additions, with only
 /// requiring a single inversion per level in the tree.
 fn create_addition_trees(rounds: &mut [RoundData<'_>]) {
-    let start = super::start_measure("create addition trees".to_string(), false);
+    //let start = super::start_measure("create addition trees".to_string(), false);
     for round in rounds.chunks_mut(1) {
         // Collect tree levels sizes
         process_addition_tree::<true>(&mut round[0]);
         // Construct the tree
         process_addition_tree::<false>(&mut round[0]);
     }
-    super::stop_measure(start);
+    //super::stop_measure(start);
 }
 
 /// Here we write the odd points in odd length buckets (the other points are
@@ -626,7 +626,7 @@ fn create_addition_trees(rounds: &mut [RoundData<'_>]) {
 /// because we only have to write at most num_buckets points.
 fn do_point_scatter<C: AffineCurve>(round: &RoundData<'_>, bases: &[C], points: &mut [C]) {
     let scatter_map = &round.scatter_map[..round.scatter_map_len];
-    let start = super::start_measure("point scatter".to_string(), false);
+    //let start = super::start_measure("point scatter".to_string(), false);
     if !scatter_map.is_empty() {
         for scatter_data in scatter_map.iter() {
             let target_idx = scatter_data.position as usize;
@@ -639,7 +639,7 @@ fn do_point_scatter<C: AffineCurve>(round: &RoundData<'_>, bases: &[C], points: 
             }
         }
     }
-    super::stop_measure(start);
+    //super::stop_measure(start);
 }
 
 /// Finally do all additions using the addition tree we've setup.
@@ -655,7 +655,7 @@ fn do_batch_additions<C: AffineCurve>(
     let output_indices = &round.output_indices;
     let base_positions = &round.base_positions;
 
-    let start = super::start_measure("batch additions".to_string(), false);
+    //let start = super::start_measure("batch additions".to_string(), false);
     for i in 0..num_levels - 1 {
         let start = level_offset[i];
         let num_points = level_counter[i];
@@ -692,7 +692,7 @@ fn do_batch_additions<C: AffineCurve>(
             }
         }
     }
-    super::stop_measure(start);
+    //super::stop_measure(start);
 }
 
 /// Accumulate all bucket results to get the result of the round
@@ -707,7 +707,7 @@ fn accumulate_buckets<C: AffineCurve>(
     let bucket_sizes = &round.bucket_sizes;
     let level_offset = &round.level_offset;
 
-    let start_time = super::start_measure("accumulate buckets".to_string(), false);
+    //let start_time = super::start_measure("accumulate buckets".to_string(), false);
     let start = level_offset[num_levels - 1];
     let buckets = &mut points[start..(start + num_buckets)];
     let mut res = C::Projective::zero();
@@ -722,6 +722,6 @@ fn accumulate_buckets<C: AffineCurve>(
             }
             res += &running_sum;
         });
-    super::stop_measure(start_time);
+    //super::stop_measure(start_time);
     res
 }
