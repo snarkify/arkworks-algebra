@@ -318,6 +318,7 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
     /// * points: a mutable slice of points used for input and output.
     ///     points[offset .. num_points+offset] will be used as input.
     ///     outputs are written to indices listed in output_indices.
+    ///     Note that inputs must  be a contiguous subsequence, but outputs do not.
     /// * output_indices: locations in the points slice to write the addition outputs.
     ///     length of this slice should equal num_points / 2.
     /// * num_points: length of the contiguous subsequence of points to take as inputs.
