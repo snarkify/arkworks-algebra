@@ -783,3 +783,66 @@ fn accumulate_buckets<C: AffineCurve>(
     //super::stop_measure(start_time);
     res
 }
+
+/// Accumulate buckets cross all rounds, using batch additions to increase efficiency.
+fn accumulate_buckets_all_rounds<C: AffineCurve>(
+    rounds: &[RoundData<'_>],
+    points: &mut [C],
+    c: usize,
+) -> Vec<C> {
+    let num_buckets = get_num_buckets(c);
+
+    // Allocate a vector to hold inputs and results of the running sum.
+    // Inputs much be a contiguous subsequence at each step and so the following structure is used.
+    // [ a1, a2, b1, b2, a1+a2, a3, b1+b2, b3, a1+a2+a3, a4, b1+b2+b3, b4, ... ]
+    // Where a1 is the largest bucket of round a and a1+a2 is the result of the first batch add.
+    // TODO(victor): Check whether doing the allocation here is an issue.
+    let mut bucket_sums = vec![C::zero(); rounds.len() * num_buckets * 2];
+    for (i, round) in rounds.iter().enumerate() {
+        let num_levels = round.num_levels;
+        let bucket_sizes = &round.bucket_sizes;
+        let level_offset = &round.level_offset;
+
+        // Fetch the slice of buckets from points array, which is the last level of the tree.
+        // Since the addition tree is already processed, there will be one sum point per bucket.
+        let start = level_offset[num_levels - 1];
+        let buckets = &points[start..(start + num_buckets)];
+
+        // Place the largest bucket at the first position for round. All other follow a rule.
+        bucket_sums[i * 2] = buckets[num_buckets - 1];
+        for ((j, bucket), bucket_size) in buckets[..num_buckets - 1]
+            .into_iter()
+            .enumerate()
+            .zip(bucket_sizes[1..num_buckets].iter())
+            .rev()
+        {
+            if *bucket_size == 0 {
+                assert_eq!(bucket, &C::zero());
+            }
+            bucket_sums[i * 2 + (rounds.len() * 2 * j) + 1] = *bucket;
+        }
+    }
+
+    // Compute the running bucket accumulations.
+    for i in 0..num_buckets - 1 {
+        let offset = i * rounds.len() * 2;
+        let num_points = rounds.len() * 2;
+
+        // Calculate the output indices. All but the last iteration interleave the outputs with the
+        // inputs for the next iteration. The last iteration groups them at the end of the vector.
+        let output_range_start = (i + 1) * rounds.len() * 2;
+        let output_indices = (output_range_start..output_range_start + rounds.len() * 2)
+            .step_by(2)
+            .map(|j| j as u32)
+            .collect::<Vec<_>>();
+
+        C::batch_add::<true, false>(
+            &mut bucket_sums,
+            &output_indices,
+            num_points,
+            offset,
+            &[],
+            &[],
+        );
+    }
+}
