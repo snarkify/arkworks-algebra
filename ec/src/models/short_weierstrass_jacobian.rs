@@ -312,6 +312,11 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
         P::mul_affine(self, Self::Parameters::COFACTOR)
     }
 
+    /// Add a batch of affine points together, using only a single inversion.
+    /// 
+    /// # Arguments
+    /// * points: a mutable slice of points used for input and output.
+    ///     points[offset .. num_points+offset] will be used as input.
     fn batch_add<const COMPLETE: bool, const LOAD_POINTS: bool>(
         points: &mut [Self],
         output_indices: &[u32],
@@ -320,6 +325,12 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
         bases: &[Self],
         base_positions: &[u32],
     ) {
+        assert_eq!(num_points & 1, 0);
+        assert_eq!(num_points / 2, output_indices.len());
+        if LOAD_POINTS {
+            assert_eq!(num_points, base_positions.len());
+        }
+
         let get_point = |point_data: u32| -> Self {
             let negate = point_data & 0x80000000 != 0;
             let base_idx = (point_data & 0x7FFFFFFF) as usize;
@@ -339,65 +350,70 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
         let mut acc = Self::BaseField::one();
 
         for i in (0..num_points).step_by(2) {
+            // Indices of the left and right addition input in the points array.
+            let left_idx = offset + i;
+            let right_idx = offset + i + 1;
+
             // Where that result of the point addition will be stored
-            let out_idx = output_indices[i >> 1] as usize - offset;
+            let out_idx = output_indices[i >> 1] as usize;
 
             #[cfg(feature = "prefetch")]
             if i < num_points - 2 {
                 if LOAD_POINTS {
+                    // Prefetch the the bases that we will access on the next iteration.
                     crate::prefetch::<Self>(bases, base_positions[i + 2] as usize);
                     crate::prefetch::<Self>(bases, base_positions[i + 3] as usize);
                 }
                 // chao: why prefetch next out_idx
-                crate::prefetch::<Self>(points, output_indices[(i >> 1) + 1] as usize - offset);
+                crate::prefetch::<Self>(points, output_indices[(i >> 1) + 1] as usize);
             }
             if LOAD_POINTS {
                 // chao: this is first level, will not override the scattered points
-                points[i] = get_point(base_positions[i]);
-                points[i + 1] = get_point(base_positions[i + 1]);
+                points[left_idx] = get_point(base_positions[i]);
+                points[right_idx] = get_point(base_positions[i + 1]);
             }
 
             if COMPLETE {
                 // Nothing to do here if one of the points is zero
-                if points[i].is_zero() | points[i + 1].is_zero() {
+                if points[left_idx].is_zero() | points[right_idx].is_zero() {
                     continue;
                 }
 
-                if points[i].x == points[i + 1].x {
-                    if points[i].y == points[i + 1].y {
+                if points[left_idx].x == points[right_idx].x {
+                    if points[left_idx].y == points[right_idx].y {
                         // Point doubling (P == Q)
                         // - s = (3 * x^2) / (2 * y)
                         // - x_2 = s^2 - (2 * x)
                         // - y_2 = s * (x - x_2) - y
 
                         // (2 * x)
-                        points[out_idx].x = points[i].x + points[i].x;
+                        points[out_idx].x = points[left_idx].x + points[left_idx].x;
                         // x^2
-                        let xx = points[i].x.square();
+                        let xx = points[left_idx].x.square();
                         // (2 * y)
-                        points[i + 1].x = points[i].y + points[i].y;
+                        points[right_idx].x = points[left_idx].y + points[left_idx].y;
                         // (3 * x^2) * acc
-                        points[i + 1].y = (xx + xx + xx) * acc;
+                        points[right_idx].y = (xx + xx + xx) * acc;
                         // acc * (2 * y)
-                        acc = acc * points[i + 1].x;
+                        acc = acc * points[right_idx].x;
                         continue;
                     } else {
                         // Zero
-                        points[i] = Self::zero();
-                        points[i + 1] = Self::zero();
+                        points[left_idx] = Self::zero();
+                        points[right_idx] = Self::zero();
                         continue;
                     }
                 }
             }
 
             // (x_2 + x_1)
-            points[out_idx].x = points[i].x + points[i + 1].x;
+            points[out_idx].x = points[left_idx].x + points[right_idx].x;
             // (x_2 - x_1)
-            points[i + 1].x -= points[i].x;
+            points[right_idx].x -= points[left_idx].x;
             // (y2 - y1) * acc
-            points[i + 1].y = (points[i + 1].y - points[i].y) * acc;
+            points[right_idx].y = (points[right_idx].y - points[left_idx].y) * acc;
             // acc * (x_2 - x_1)
-            acc *= points[i + 1].x;
+            acc *= points[right_idx].x;
         }
 
         // Batch invert
@@ -410,36 +426,40 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
         }
 
         for i in (0..num_points).step_by(2).rev() {
+            // Indices of the left and right addition input in the points array.
+            let left_idx = offset + i;
+            let right_idx = offset + i + 1;
+
             // Where that result of the point addition will be stored
-            let out_idx = output_indices[i >> 1] as usize - offset;
+            let out_idx = output_indices[i >> 1] as usize;
 
             #[cfg(feature = "prefetch")]
             if i > 0 {
                 // chao: why prefetch previous out_idx ??
-                crate::prefetch::<Self>(points, output_indices[(i >> 1) - 1] as usize - offset);
+                crate::prefetch::<Self>(points, output_indices[(i >> 1) - 1] as usize);
             }
 
             if COMPLETE {
-                // points[i] is zero so the sum is points[i + 1]
-                if points[i].is_zero() {
-                    points[out_idx] = points[i + 1];
+                // points[left_idx] is zero so the sum is points[right_idx]
+                if points[left_idx].is_zero() {
+                    points[out_idx] = points[right_idx];
                     continue;
                 }
-                // points[i + 1] is zero so the sum is points[i]
-                if points[i + 1].is_zero() {
-                    points[out_idx] = points[i];
+                // points[right_idx] is zero so the sum is points[left_idx]
+                if points[right_idx].is_zero() {
+                    points[out_idx] = points[left_idx];
                     continue;
                 }
             }
 
             // lambda
-            points[i + 1].y *= acc;
+            points[right_idx].y *= acc;
             // acc * (x_2 - x_1)
-            acc *= points[i + 1].x;
+            acc *= points[right_idx].x;
             // x_3 = lambda^2 - (x_2 + x_1)
-            points[out_idx].x = points[i + 1].y.square() - points[out_idx].x;
+            points[out_idx].x = points[right_idx].y.square() - points[out_idx].x;
             // y_3 = lambda * (x_1 - x_3) - y_1
-            points[out_idx].y = points[i + 1].y * (points[i].x - points[out_idx].x) - points[i].y;
+            points[out_idx].y = points[right_idx].y * (points[left_idx].x - points[out_idx].x) - points[left_idx].y;
             points[out_idx].infinity = false;
         }
     }
