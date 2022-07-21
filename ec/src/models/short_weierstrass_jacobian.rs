@@ -313,7 +313,7 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
     }
 
     /// Add a batch of affine points together, using only a single inversion.
-    /// 
+    ///
     /// # Arguments
     /// * points: a mutable slice of points used for input and output.
     ///     points[offset .. num_points+offset] will be used as input.
@@ -469,7 +469,8 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
             // x_3 = lambda^2 - (x_2 + x_1)
             points[out_idx].x = points[right_idx].y.square() - points[out_idx].x;
             // y_3 = lambda * (x_1 - x_3) - y_1
-            points[out_idx].y = points[right_idx].y * (points[left_idx].x - points[out_idx].x) - points[left_idx].y;
+            points[out_idx].y =
+                points[right_idx].y * (points[left_idx].x - points[out_idx].x) - points[left_idx].y;
             points[out_idx].infinity = false;
         }
     }

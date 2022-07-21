@@ -135,7 +135,7 @@ pub struct MultiExpContext<C: AffineCurve> {
     rounds: SharedRoundData,
 }
 
-/// Data shared across the rounds of an 
+/// Data shared across the rounds of an
 // TODO(victor): Why is this structure describing a vector of u32 as "memory"?
 #[derive(Clone, Debug, Default)]
 struct SharedRoundData {
@@ -191,8 +191,7 @@ struct ScatterData {
 
 impl<C: AffineCurve> MultiExp<C> {
     /// Performs a multi-exponentiation operation.
-    /// Set complete to true if the bases are not guaranteed linearly
-    /// independent.
+    /// Set COMPLETE to true if bases are not guaranteed linearly independent.
 
     /// Create a new MultiExp instance with the specified bases
     pub fn new(bases: &[C]) -> Self {
@@ -200,7 +199,9 @@ impl<C: AffineCurve> MultiExp<C> {
             bases: bases.to_vec(),
         }
     }
-    pub fn compute_msm_opt(
+
+    // TODO(victor): Run benchmarks to see if setting COMPLETE=true effects performance.
+    pub fn compute_msm_opt<const COMPLETE: bool, const BATCH_ACC_BUCKETS: bool>(
         bases: &[C],
         scalars: &[<C::ScalarField as PrimeField>::BigInt],
     ) -> C::Projective {
@@ -209,29 +210,24 @@ impl<C: AffineCurve> MultiExp<C> {
         let bases = &bases[..size];
         let msm = MultiExp::new(bases);
         let mut ctx = MultiExpContext::default();
-        // TODO(victor): I'm not sure setting `complete=false` here is safe. It will result in a
-        // panic if two points are equal or if the result is zero.
-        let res = msm.evaluate(&mut ctx, scalars, false);
+        let res = msm.evaluate::<COMPLETE, BATCH_ACC_BUCKETS>(&mut ctx, scalars);
         res
     }
 
-    pub fn evaluate(
+    pub fn evaluate<const COMPLETE: bool, const BATCH_ACC_BUCKETS: bool>(
         &self,
         ctx: &mut MultiExpContext<C>,
         coeffs: &[<C::ScalarField as PrimeField>::BigInt],
-        complete: bool,
     ) -> <C as AffineCurve>::Projective {
-        self.evaluate_with(ctx, coeffs, complete, get_best_c(coeffs.len()))
+        self.evaluate_with::<COMPLETE, BATCH_ACC_BUCKETS>(ctx, coeffs, get_best_c(coeffs.len()))
     }
 
     /// Performs a multi-exponentiation operation with the given bucket width.
-    /// Set complete to true if the bases are not guaranteed linearly
-    /// independent.
-    pub fn evaluate_with(
+    /// Set COMPLETE to true if bases are not guaranteed linearly independent.
+    pub fn evaluate_with<const COMPLETE: bool, const BATCH_ACC_BUCKETS: bool>(
         &self,
         ctx: &mut MultiExpContext<C>,
         coeffs: &[<C::ScalarField as PrimeField>::BigInt],
-        complete: bool,
         c: usize,
     ) -> <C as AffineCurve>::Projective {
         assert!(c >= 4);
@@ -273,7 +269,7 @@ impl<C: AffineCurve> MultiExp<C> {
             // scatter the odd points in the odd length buckets to the addition tree
             do_point_scatter::<C>(round, bases, &mut ctx.points);
             // do all bucket additions
-            do_batch_additions::<C>(round, bases, &mut ctx.points, complete);
+            do_batch_additions::<C, COMPLETE>(round, bases, &mut ctx.points);
             // get the final result of the round
             *acc = accumulate_buckets(round, &mut ctx.points, c);
         }
@@ -465,8 +461,16 @@ fn sort<C: AffineCurve>(wnafs: &mut [u32], rounds: &mut [RoundData<'_>], c: usiz
     //super::stop_measure(start);
 }
 
-/// Creates the addition tree.
-/// When PREPROCESS is true we just calculate the size of each level.
+/// Creates the addition tree, adding all relevant metadata to the round struct.
+///
+/// # Const arguments
+///
+/// PREPROCESS: True we just calculate the size of each level. Note that the level_size information
+///     is added to the round state after preprocessing. This function should first be run with
+///     PREPROCESS set to true, then run again with the same round data and preprocess false.
+///
+/// # Notes
+///
 /// All points in a bucket need to be added to each other. Because the affine
 /// formulas are used we need to add points together in pairs. So we have to
 /// make sure that on each level we have an even number of points for each
@@ -609,12 +613,11 @@ fn process_addition_tree<const PREPROCESS: bool>(round: &mut RoundData<'_>) {
             // (unless we are writing the final result to the bucket level)
             let next_level_size = size >> 1;
             let next_level_odd = next_level_size & 1 == 1;
-            let redirect =
-                if next_level_odd && state == State::Even && !last_level {
-                    1usize
-                } else {
-                    0usize
-                };
+            let redirect = if next_level_odd && state == State::Even && !last_level {
+                1usize
+            } else {
+                0usize
+            };
 
             // An addition works on two points and has one result, so this takes only half
             // the size chao: start_level_size is the sum of level_size up
@@ -712,11 +715,10 @@ fn do_point_scatter<C: AffineCurve>(round: &RoundData<'_>, bases: &[C], points: 
 }
 
 /// Finally do all additions using the addition tree we've setup.
-fn do_batch_additions<C: AffineCurve>(
+fn do_batch_additions<C: AffineCurve, const COMPLETE: bool>(
     round: &RoundData<'_>,
     bases: &[C],
     points: &mut [C],
-    complete: bool,
 ) {
     let num_levels = round.num_levels;
     let level_sizes = &round.level_sizes;
@@ -733,32 +735,16 @@ fn do_batch_additions<C: AffineCurve>(
         if i == 0 {
             assert_eq!(offset, 0);
             let base_positions = &base_positions[offset..offset + num_points];
-            if complete {
-                C::batch_add::<true, true>(
-                    points,
-                    output_indices,
-                    num_points,
-                    offset,
-                    bases,
-                    base_positions,
-                );
-            } else {
-                C::batch_add::<false, true>(
-                    points,
-                    output_indices,
-                    num_points,
-                    offset,
-                    bases,
-                    base_positions,
-                );
-            }
+            C::batch_add::<COMPLETE, true>(
+                points,
+                output_indices,
+                num_points,
+                offset,
+                bases,
+                base_positions,
+            );
         } else {
-            #[allow(collapsible-else-if)]
-            if complete {
-                C::batch_add::<true, false>(points, output_indices, num_points, offset, &[], &[]);
-            } else {
-                C::batch_add::<false, false>(points, output_indices, num_points, offset, &[], &[]);
-            }
+            C::batch_add::<COMPLETE, false>(points, output_indices, num_points, offset, &[], &[]);
         }
     }
     //super::stop_measure(start);
