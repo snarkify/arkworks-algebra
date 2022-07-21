@@ -317,6 +317,15 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
     /// # Arguments
     /// * points: a mutable slice of points used for input and output.
     ///     points[offset .. num_points+offset] will be used as input.
+    ///     outputs are written to indices listed in output_indices.
+    /// * output_indices: locations in the points slice to write the addition outputs.
+    ///     length of this slice should equal num_points / 2.
+    /// * num_points: length of the contiguous subsequence of points to take as inputs.
+    /// * offset: where in the slice of points that the input subsequence starts.
+    /// * bases: a slice of points that can be loaded into the input sequence.
+    ///     Only used if LOAD_POINTS is true
+    /// * base_positions: positions in the bases slice from which points should be loaded.
+    ///     Only used if LOAD_POINTS is true
     fn batch_add<const COMPLETE: bool, const LOAD_POINTS: bool>(
         points: &mut [Self],
         output_indices: &[u32],
