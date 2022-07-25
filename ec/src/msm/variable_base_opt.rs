@@ -1,6 +1,7 @@
 //use crate::{ark_std::string::ToString, msm::stop_measure};
 use ark_ff::prelude::*;
 use ark_std::vec::Vec;
+use core::ops::AddAssign;
 
 use crate::{AffineCurve, ProjectiveCurve};
 
@@ -264,42 +265,30 @@ impl<C: AffineCurve> MultiExp<C> {
         create_addition_trees(&mut rounds);
 
         // Now process each round individually.
-        let partials = if BATCH_ACC_BUCKETS {
-            for round in rounds.iter() {
-                // scatter the odd points in the odd length buckets to the addition tree
-                do_point_scatter::<C>(round, bases, &mut ctx.points);
-                // do all bucket additions
-                do_batch_additions::<C, COMPLETE>(round, bases, &mut ctx.points);
-            }
-            // accumulate bucket results across all rounds as a batch.
-            accumulate_buckets_all_rounds(&rounds, &mut ctx.points, c)
-        } else {
-            let mut partials = vec![C::Projective::zero(); num_rounds];
-            for (round, acc) in rounds.iter().zip(partials.iter_mut()) {
-                // scatter the odd points in the odd length buckets to the addition tree
-                do_point_scatter::<C>(round, bases, &mut ctx.points);
-                // do all bucket additions
-                do_batch_additions::<C, COMPLETE>(round, bases, &mut ctx.points);
-                // get the final result of the round
-                *acc = accumulate_buckets(round, &mut ctx.points, c);
-            }
-            C::Projective::batch_normalization_into_affine(&partials)
-        };
+        let mut partials = vec![C::Projective::zero(); num_rounds];
+        for (round, acc) in rounds.iter().zip(partials.iter_mut()) {
+            // scatter the odd points in the odd length buckets to the addition tree
+            do_point_scatter::<C>(round, bases, &mut ctx.points);
+            // do all bucket additions
+            do_batch_additions::<C, COMPLETE>(round, bases, &mut ctx.points);
+            // get the final result of the round
+            *acc = accumulate_buckets::<C, BATCH_ACC_BUCKETS>(round, &mut ctx.points, c);
+        }
 
         // Accumulate the rounds (i.e. the windows) to get the final result.
-        let lowest = partials[0];
-        let res = lowest.into_projective()
-            + partials
+        let mut res =
+            partials
                 .iter()
                 .skip(1)
                 .rev()
                 .fold(C::Projective::zero(), |mut total, sum_i| {
-                    total.add_assign_mixed(sum_i);
+                    total.add_assign(sum_i);
                     for _ in 0..w {
                         total.double_in_place();
                     }
                     total
                 });
+        res.add_assign(&partials[0]);
         //stop_measure(start);
         res
     }
@@ -766,7 +755,7 @@ fn do_batch_additions<C: AffineCurve, const COMPLETE: bool>(
 // TODO(victor): Accumulating the buckets appears to take about 15-25% of the total execution time,
 // requiring 2^c*w additions, which currently use a simple structure. I should try changing this
 // such that buckets across all rounds are accumulated together using batch addition.
-fn accumulate_buckets<C: AffineCurve>(
+fn accumulate_buckets<C: AffineCurve, const BATCH_ACC_BUCKETS: bool>(
     round: &RoundData<'_>,
     points: &mut [C],
     c: usize,
@@ -782,126 +771,71 @@ fn accumulate_buckets<C: AffineCurve>(
     // the "0" bucket (Although bucket_sizes[0] is the size of the "0" bucket).
     let start = level_offset[num_levels - 1];
     let buckets = &mut points[start..(start + num_buckets - 1)];
-    let mut res = C::Projective::zero();
     let mut running_sum = C::Projective::zero();
     assert_eq!(buckets.len(), bucket_sizes.len() - 1);
+    assert_eq!(buckets.len(), num_buckets - 1);
 
-    bucket_sizes[1..]
-        .into_iter()
-        .zip(buckets)
-        .rev()
-        .for_each(|(bz, b)| {
-            if *bz > 0 {
-                running_sum.add_assign_mixed(b);
-            }
-            res += &running_sum;
-        });
-
-    //super::stop_measure(start_time);
-    res
-}
-
-/// Accumulate buckets cross all rounds, using batch additions to increase efficiency.
-fn accumulate_buckets_all_rounds<C: AffineCurve>(
-    rounds: &[RoundData<'_>],
-    points: &mut [C],
-    c: usize,
-) -> Vec<C> {
-    // Get the number of non-zero buckets. Note that this is a power of 2.
-    let num_nz_buckets = get_num_buckets(c) - 1;
-
-    // Allocate a vector to hold inputs and results of the running sum.
-    // Inputs much be a contiguous subsequence at each step and so the following structure is used.
-    // [ a1, a2, b1, b2, a1+a2, a3, b1+b2, b3, a1+a2+a3, a4, b1+b2+b3, b4, ... ]
-    // Where a1 is the largest bucket of round a and a1+a2 is the result of the first batch add.
-    // TODO(victor): Check whether doing the allocation here is an issue.
-    let mut bucket_sums = vec![C::zero(); rounds.len() * num_nz_buckets * 2];
-    for (i, round) in rounds.iter().enumerate() {
-        let num_levels = round.num_levels;
-        let bucket_sizes = &round.bucket_sizes;
-        let level_offset = &round.level_offset;
-
-        // Fetch the slice of buckets from points array, which is the last level of the tree.
-        // Since the addition tree is already processed, there will be one sum point per bucket.
-        let start = level_offset[num_levels - 1];
-        let buckets = &points[start..(start + num_nz_buckets)];
-
-        // Place the largest bucket at the first position for round. All other follow a rule.
-        assert_eq!(buckets.len(), bucket_sizes.len() - 1);
-        bucket_sums[i * 2] = buckets[buckets.len() - 1];
-        for (j, (bucket, bucket_size)) in buckets[..buckets.len() - 1]
+    if BATCH_ACC_BUCKETS {
+        let running_sums = &mut vec![C::Projective::zero(); buckets.len()];
+        bucket_sizes[1..]
             .into_iter()
-            .zip(bucket_sizes[1..buckets.len()].iter())
+            .zip(buckets)
             .rev()
             .enumerate()
-        {
-            if *bucket_size == 0 {
-                assert_eq!(bucket, &C::zero());
-            }
-            bucket_sums[2*(i + rounds.len()*j) + 1] = *bucket;
+            .for_each(|(i, (bz, b))| {
+                if *bz > 0 {
+                    running_sum.add_assign_mixed(b);
+                }
+                running_sums[i] = running_sum;
+            });
+
+        // Sum all the running bucket accumulations in a binary addition tree using batch_add.
+        // Initialize the tree with the affine normalization of the running sums for all buckets.
+        // QUESTION(victor): Most of the code avoids allocations. Does this allocation effect
+        // performance.
+        let running_sum_tree = &mut C::Projective::batch_normalization_into_affine(running_sums);
+        running_sum_tree.resize(running_sums.len() * 2 - 1, C::zero());
+
+        // TODO(victor): When we get to the smaller levels of the tree, it will become faster to do an
+        // add or add mixed than to keep doing batch adds. Consider adding a cutoff here.
+        let initial_num_inputs = running_sums.len();
+        let mut input_offset = 0;
+        for i in (0..).take_while(|i| initial_num_inputs >> i > 1) {
+            let num_inputs = initial_num_inputs >> i;
+            assert_eq!(num_inputs & 1, 0);
+            let num_outputs = num_inputs >> 1;
+            let output_offset = input_offset + num_inputs;
+            let output_indices = (output_offset..output_offset + num_outputs)
+                .map(|i| i as u32)
+                .collect::<Vec<u32>>();
+
+            C::batch_add::<true, false>(
+                running_sum_tree,
+                &output_indices,
+                num_inputs,
+                input_offset,
+                &[],
+                &[],
+            );
+            input_offset += num_inputs;
         }
+
+        //super::stop_measure(start_time);
+        running_sum_tree[running_sum_tree.len()-1].into_projective()
+    } else {
+        let mut res = C::Projective::zero();
+        bucket_sizes[1..]
+            .into_iter()
+            .zip(buckets)
+            .rev()
+            .for_each(|(bz, b)| {
+                if *bz > 0 {
+                    running_sum.add_assign_mixed(b);
+                }
+                res += &running_sum;
+            });
+
+        //super::stop_measure(start_time);
+        res
     }
-
-    // Compute the running bucket accumulations, keeping all intermediate results.
-    // QUESTION(victor): Is batch_add here the fastest implementaion? Likely not since the number
-    // of additions in each batch is rounds.len().
-    for i in 0..num_nz_buckets - 1 {
-        let input_offset = i * rounds.len() * 2;
-        let num_points = rounds.len() * 2;
-
-        // Calculate the output indices. All but the last iteration interleave the outputs with the
-        // inputs for the next iteration. The last iteration groups them at the end of the vector.
-        let output_range_start = (i + 1) * rounds.len() * 2;
-        let output_indices = (output_range_start..output_range_start + rounds.len() * 2)
-            .step_by(2)
-            .map(|j| j as u32)
-            .collect::<Vec<_>>();
-
-        C::batch_add::<true, false>(
-            &mut bucket_sums,
-            &output_indices,
-            num_points,
-            input_offset,
-            &[],
-            &[],
-        );
-    }
-
-    // Sum all the running bucket accumulations in a binary addition tree using batch_add.
-    let mut bucket_tree = vec![C::zero(); (num_nz_buckets * 2 - 1) * rounds.len()];
-    // Calculate a vector of indices for all the running bucket sums (i.e. where to load the points
-    // from the for the first batch of additions).
-    let bucket_sum_indices = (0..rounds.len()*2).step_by(2).map(|i| (i..rounds.len()*num_nz_buckets*2).step_by(rounds.len()*2)).flatten().map(|i| i as u32).collect::<Vec<u32>>();
-    let initial_num_inputs = num_nz_buckets * rounds.len();
-    let initial_num_outputs = initial_num_inputs >> 1;
-    let initial_output_indices = (initial_num_inputs..initial_num_inputs+initial_num_outputs).map(|i| i as u32).collect::<Vec<u32>>();
-    C::batch_add::<true, true>(
-        &mut bucket_tree,
-        &initial_output_indices,
-        initial_num_inputs,
-        0,
-        &bucket_sums,
-        &bucket_sum_indices,
-    );
-
-    let mut input_offset = initial_num_inputs;
-    for i in (1..).take_while(|i| initial_num_inputs >> i > rounds.len()) {
-        let num_inputs = initial_num_inputs >> i;
-        let num_outputs = num_inputs >> 1;
-        let output_indices = (input_offset+num_inputs..input_offset+num_inputs+num_outputs).map(|i| i as u32).collect::<Vec<u32>>();
-
-        C::batch_add::<true, false>(
-            &mut bucket_tree,
-            &output_indices,
-            num_inputs,
-            input_offset,
-            &[],
-            &[],
-        );
-        input_offset += num_inputs;
-    }
-    
-    let result = bucket_tree[input_offset..].to_vec();
-    assert_eq!(result.len(), rounds.len());
-    result
 }

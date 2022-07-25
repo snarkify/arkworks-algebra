@@ -327,6 +327,11 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
     ///     Only used if LOAD_POINTS is true
     /// * base_positions: positions in the bases slice from which points should be loaded.
     ///     Only used if LOAD_POINTS is true
+    ///
+    /// # WARNING
+    ///
+    /// Input points to this function are modified and should be assumed to be consumed. Do not use
+    /// points that were used as inputs to this function after thie call returns.
     fn batch_add<const COMPLETE: bool, const LOAD_POINTS: bool>(
         points: &mut [Self],
         output_indices: &[u32],
@@ -428,6 +433,7 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
 
         // Batch invert
         if COMPLETE {
+            // QUESTION(victor): Is this right?
             if !acc.is_zero() {
                 acc = acc.inverse().unwrap();
             }
