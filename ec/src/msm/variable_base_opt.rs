@@ -69,10 +69,10 @@ fn get_wnaf<C: AffineCurve>(
     wnaf: &mut [u32],
     stride: usize,
 ) {
-    assert!(w >= 2);
-    assert!(w < 64);
+    debug_assert!(w >= 2);
+    debug_assert!(w < 64);
     // QUESTION(victor): Is this assertion correct?
-    assert_eq!(num_rounds, get_wnaf_size::<C>(w));
+    debug_assert_eq!(num_rounds, get_wnaf_size::<C>(w));
     fn get_bits_at<C: AffineCurve>(
         v: &<C::ScalarField as PrimeField>::BigInt,
         pos: usize,
@@ -97,7 +97,7 @@ fn get_wnaf<C: AffineCurve>(
             borrow = 0;
         }
     }
-    assert_eq!(borrow, 0);
+    debug_assert_eq!(borrow, 0);
 }
 
 /// Returns the best bucket width for the given number of points.
@@ -231,7 +231,7 @@ impl<C: AffineCurve> MultiExp<C> {
         coeffs: &[<C::ScalarField as PrimeField>::BigInt],
         c: usize,
     ) -> <C as AffineCurve>::Projective {
-        assert!(c >= 4);
+        debug_assert!(c >= 4);
 
         // Allocate more memory if required
         ctx.allocate(coeffs.len(), c);
@@ -240,7 +240,7 @@ impl<C: AffineCurve> MultiExp<C> {
         let mut rounds = ctx.rounds.get_rounds::<C>(coeffs.len(), c);
 
         // Get the bases for the coefficients
-        assert!(coeffs.len() == self.bases.len());
+        debug_assert!(coeffs.len() == self.bases.len());
         //let start = super::start_measure("msm".to_string(), false);
         let bases = &self.bases[..coeffs.len()];
         if coeffs.len() < 16 {
@@ -441,7 +441,7 @@ fn radix_sort(wnafs: &mut [u32], round: &mut RoundData<'_>) {
 
     // Fill in point data grouped in buckets
     let point_data = &mut round.point_data;
-    assert_eq!(point_data.len(), wnafs.len());
+    debug_assert_eq!(point_data.len(), wnafs.len());
     for (idx, wnaf) in wnafs.iter().enumerate() {
         let bucket_idx = (wnaf & 0x7FFFFFFF) as usize;
         point_data[bucket_offsets[bucket_idx]] = (wnaf & 0x80000000) | (idx as u32);
@@ -734,7 +734,7 @@ fn do_batch_additions<C: AffineCurve, const COMPLETE: bool>(
         let output_indices = &output_indices[start / 2..(start + num_points) / 2];
         let offset = start;
         if i == 0 {
-            assert_eq!(offset, 0);
+            debug_assert_eq!(offset, 0);
             let base_positions = &base_positions[offset..offset + num_points];
             C::batch_add::<COMPLETE, true>(
                 points,
@@ -772,8 +772,8 @@ fn accumulate_buckets<C: AffineCurve, const BATCH_ACC_BUCKETS: bool>(
     let start = level_offset[num_levels - 1];
     let buckets = &mut points[start..(start + num_buckets - 1)];
     let mut running_sum = C::Projective::zero();
-    assert_eq!(buckets.len(), bucket_sizes.len() - 1);
-    assert_eq!(buckets.len(), num_buckets - 1);
+    debug_assert_eq!(buckets.len(), bucket_sizes.len() - 1);
+    debug_assert_eq!(buckets.len(), num_buckets - 1);
 
     if BATCH_ACC_BUCKETS {
         let running_sums = &mut vec![C::Projective::zero(); buckets.len()];
@@ -802,7 +802,7 @@ fn accumulate_buckets<C: AffineCurve, const BATCH_ACC_BUCKETS: bool>(
         let mut input_offset = 0;
         for i in (0..).take_while(|i| initial_num_inputs >> i > 1) {
             let num_inputs = initial_num_inputs >> i;
-            assert_eq!(num_inputs & 1, 0);
+            debug_assert_eq!(num_inputs & 1, 0);
             let num_outputs = num_inputs >> 1;
             let output_offset = input_offset + num_inputs;
             let output_indices = (output_offset..output_offset + num_outputs)

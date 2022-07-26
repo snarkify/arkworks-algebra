@@ -340,10 +340,10 @@ impl<P: Parameters> AffineCurve for GroupAffine<P> {
         bases: &[Self],
         base_positions: &[u32],
     ) {
-        assert_eq!(num_points & 1, 0);
-        assert_eq!(num_points / 2, output_indices.len());
+        debug_assert_eq!(num_points & 1, 0);
+        debug_assert_eq!(num_points / 2, output_indices.len());
         if LOAD_POINTS {
-            assert_eq!(num_points, base_positions.len());
+            debug_assert_eq!(num_points, base_positions.len());
         }
 
         let get_point = |point_data: u32| -> Self {
