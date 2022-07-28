@@ -775,8 +775,9 @@ fn accumulate_buckets<C: AffineCurve, const BATCH_ACC_BUCKETS: bool>(
     debug_assert_eq!(buckets.len(), bucket_sizes.len() - 1);
     debug_assert_eq!(buckets.len(), num_buckets - 1);
 
-    if BATCH_ACC_BUCKETS {
-        let running_sums = &mut vec![C::Projective::zero(); buckets.len()];
+    // If enabled and there are a sufficient number of points, use a batched summation method.
+    if BATCH_ACC_BUCKETS && buckets.len() > 384 {
+        let mut running_sums = vec![C::Projective::zero(); buckets.len()];
         bucket_sizes[1..]
             .into_iter()
             .zip(buckets)
@@ -791,17 +792,16 @@ fn accumulate_buckets<C: AffineCurve, const BATCH_ACC_BUCKETS: bool>(
 
         // Sum all the running bucket accumulations in a binary addition tree using batch_add.
         // Initialize the tree with the affine normalization of the running sums for all buckets.
-        // QUESTION(victor): Most of the code avoids allocations. Does this allocation effect
-        // performance.
-        let running_sum_tree = &mut C::Projective::batch_normalization_into_affine(running_sums);
-        running_sum_tree.resize(running_sums.len() * 2 - 1, C::zero());
+        // QUESTION(victor): We try to avoid allocations. Does this allocation effect performance?
+        let mut num_inputs = running_sums.len();
+        C::Projective::batch_normalization(&mut running_sums);
+        let mut running_sum_tree = running_sums.into_iter().map(|p| p.into()).collect::<Vec<C>>();
+        running_sum_tree.resize(num_inputs * 2 - 1, C::zero());
 
-        // TODO(victor): When we get to the smaller levels of the tree, it will become faster to do an
-        // add or add mixed than to keep doing batch adds. Consider adding a cutoff here.
-        let initial_num_inputs = running_sums.len();
+        // Use batch affine addition in a tree until the number of inputs is reduced to 32.
+        // With fewer than 32 points, it becomes faster to use projective addition for the rest.
         let mut input_offset = 0;
-        for i in (0..).take_while(|i| initial_num_inputs >> i > 1) {
-            let num_inputs = initial_num_inputs >> i;
+        while num_inputs > 32 {
             debug_assert_eq!(num_inputs & 1, 0);
             let num_outputs = num_inputs >> 1;
             let output_offset = input_offset + num_inputs;
@@ -809,8 +809,10 @@ fn accumulate_buckets<C: AffineCurve, const BATCH_ACC_BUCKETS: bool>(
                 .map(|i| i as u32)
                 .collect::<Vec<u32>>();
 
+            // COMPLETE is always set to true here since we _know_ the inputs are not linearly
+            // independent.
             C::batch_add::<true, false>(
-                running_sum_tree,
+                &mut running_sum_tree,
                 &output_indices,
                 num_inputs,
                 input_offset,
@@ -818,10 +820,12 @@ fn accumulate_buckets<C: AffineCurve, const BATCH_ACC_BUCKETS: bool>(
                 &[],
             );
             input_offset += num_inputs;
+            num_inputs = num_inputs >> 1;
         }
 
-        //super::stop_measure(start_time);
-        running_sum_tree[running_sum_tree.len()-1].into_projective()
+        // Sum the remaining inputs using the mixed formula.
+        let remaining_inputs = &mut running_sum_tree[input_offset..input_offset+num_inputs];
+        remaining_inputs.iter().skip(1).fold(remaining_inputs[0].into_projective(), |mut a, b| { a.add_assign_mixed(b); a })
     } else {
         let mut res = C::Projective::zero();
         bucket_sizes[1..]
