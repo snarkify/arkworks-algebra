@@ -217,7 +217,7 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                     r[j - 1] = fa::mac_with_carry(r[j], k, Self::MODULUS.0[j], &mut carry2);
                 }
 
-                // Final carry word will not overflow due to the NO_CARRY rule.
+                // Final addition will not overflow due to the NO_CARRY rule.
                 r[N-1] =  p[(N+2)%3] + p[(N+2)%3] + carry1 + carry2;
             }
 
@@ -233,7 +233,7 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                 r[j - 1] = fa::mac_with_carry(r[j], k, Self::MODULUS.0[j], &mut carry2);
             }
 
-            // Final carry word will not overflow due to the NO_CARRY rule.
+            // Final addition will not overflow due to the NO_CARRY rule.
             r[N-1] = carry1 + carry2;
 
             (a.0).0 = r;
