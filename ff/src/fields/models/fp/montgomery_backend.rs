@@ -193,17 +193,17 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
 
                 // Incremental squaring operations.
                 // j=i+1 case for the loop below.
-                let (p1, p0, p1_prev) = ((i+1)%3, (i+2)%3, i%3);
-                // p1, p0 = p1_prev + a[i] * a[j]
+                let (p1, p0, p_carry) = ((i+1)%3, (i+2)%3, i%3);
+                // p1, p0 = p_carry + a[i] * a[j]
                 p[p0] = fa::mac(0, (a.0).0[i], (a.0).0[i+1], &mut p[p1]);
                 // C, r[i] = r[j] + 2*p0 + C
                 r[i+1] = adc!(&mut carry1, r[i+1], p[p0], p[p0]);
 
                 for j in i+2..N {
-                    let (p1, p0, p1_prev) = (j%3, (j+1)%3, (j+2)%3);
-                    // p1, p0 = a[i] * a[j]
-                    p[p0] = fa::mac(p[p1_prev], (a.0).0[i], (a.0).0[j], &mut p[p1]);
-                    // C, r[i] = r[j] + 2*p0 + 2*p1_prev
+                    let (p1, p0, p_carry) = (j%3, (j+1)%3, (j+2)%3);
+                    // p1, p0 = p_carry + a[i] * a[j]
+                    p[p0] = fa::mac(p[p_carry], (a.0).0[i], (a.0).0[j], &mut p[p1]);
+                    // C, r[i] = r[j] + 2*p0 + 2*p_carry
                     r[j] = adc!(&mut carry1, r[j], p[p0], p[p0]);
                 }
 
@@ -218,7 +218,6 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                 }
 
                 // Final carry word will not overflow due to the NO_CARRY rule.
-                // TODO(victor): Double check this to make sure it is true.
                 r[N-1] =  p[(N+2)%3] + p[(N+2)%3] + carry1 + carry2;
             }
 
@@ -235,7 +234,6 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             }
 
             // Final carry word will not overflow due to the NO_CARRY rule.
-            // TODO(victor): Double check this to make sure it is true.
             r[N-1] = carry1 + carry2;
 
             (a.0).0 = r;

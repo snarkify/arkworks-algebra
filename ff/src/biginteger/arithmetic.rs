@@ -20,21 +20,6 @@ pub(crate) fn adc(a: u64, b: u64, carry: &mut u64) -> u64 {
     adc!(&mut *carry, a, b)
 }
 
-macro_rules! mul {
-    ($a:expr, $b:expr, &mut $carry:expr$(,)?) => {{
-        let tmp = ($a as u128 * $b as u128);
-        $carry = (tmp >> 64) as u64;
-        tmp as u64
-    }};
-}
-
-/// Calculate a * b, returning the least significant digit and setting the
-/// carry to the most significant digit.
-#[inline(always)]
-pub(crate) fn mul(a: u64, b: u64, carry: &mut u64) -> u64 {
-    mul!(a, b, &mut *carry)
-}
-
 macro_rules! mac_with_carry {
     ($a:expr, $b:expr, $c:expr, &mut $carry:expr$(,)?) => {{
         let tmp = ($a as u128) + ($b as u128 * $c as u128) + ($carry as u128);
