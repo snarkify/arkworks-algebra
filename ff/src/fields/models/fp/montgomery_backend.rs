@@ -192,9 +192,9 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                 for j in i+1..N {
                     let (p1, p0, p1_prev) = (j%3, (j+1)%3, (j+2)%3);
                     // p1, p0 = a[i] * a[j]
-                    p[p0] = fa::mul((a.0).0[i], (a.0).0[j], &mut p[p1]);
+                    p[p0] = fa::mac(p[p1_prev], (a.0).0[i], (a.0).0[j], &mut p[p1]);
                     // C, r[i] = r[j] + 2*p0 + 2*p1_prev
-                    r[j] = adc!(&mut carry1, r[j], p[p0], p[p0], p[p1_prev], p[p1_prev]);
+                    r[j] = adc!(&mut carry1, r[j], p[p0], p[p0]);
                 }
 
                 // k = r[0] * q'[0]
