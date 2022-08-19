@@ -1,8 +1,13 @@
 use ark_std::{vec, vec::Vec};
 
+/// adc with the option to accept a variable number of args.
+/// carry is given as the first arg, followed by any number of inputs. 
+// NOTE(victor) Need to look at the assembly output for this since it was likely written
+// specifically to ensure the compiler implements it with a particular instruction and I may have
+// borked that.
 macro_rules! adc {
-    ($a:expr, $b:expr, &mut $carry:expr$(,)?) => {{
-        let tmp = ($a as u128) + ($b as u128) + ($carry as u128);
+    (&mut $carry:expr, $($x:expr),*) => {{
+        let tmp = $(($x as u128) + )* ($carry as u128);
         $carry = (tmp >> 64) as u64;
         tmp as u64
     }};
@@ -12,7 +17,22 @@ macro_rules! adc {
 /// carry value.
 #[inline(always)]
 pub(crate) fn adc(a: u64, b: u64, carry: &mut u64) -> u64 {
-    adc!(a, b, &mut *carry)
+    adc!(&mut *carry, a, b)
+}
+
+macro_rules! mul {
+    ($a:expr, $b:expr, &mut $carry:expr$(,)?) => {{
+        let tmp = ($a as u128 * $b as u128);
+        $carry = (tmp >> 64) as u64;
+        tmp as u64
+    }};
+}
+
+/// Calculate a * b, returning the least significant digit and setting the
+/// carry to the most significant digit.
+#[inline(always)]
+pub(crate) fn mul(a: u64, b: u64, carry: &mut u64) -> u64 {
+    mul!(a, b, &mut *carry)
 }
 
 macro_rules! mac_with_carry {

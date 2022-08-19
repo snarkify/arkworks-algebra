@@ -145,6 +145,9 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             Self::mul_assign(a, &temp);
             return;
         }
+
+        // If we can use the NO_CARRY optimization and we are on a plaform with an assembly
+        // implementation, use the assembly implementation.
         #[cfg(all(
             feature = "asm",
             inline_asm_stable,
@@ -169,6 +172,66 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                 return;
             }
         }
+        
+        // If we can use the NO_CARRY optimization (but don't have an assembly implementation), use
+        // an implementation written in Rust.
+        // TODO(victor): It appears that this condition is slightly wrong since NO_CARRY requires
+        // R > 2N for multiplication, but R > 4N for squaring.
+        // https://hackmd.io/@gnark/modular_multiplication#Montgomery-squaring
+        #[cfg(feature = "square-no-carry")]
+        if Self::CAN_USE_NO_CARRY_OPT {
+            let mut carry1: u64 = 0;
+            let mut carry2: u64 = 0;
+            let mut r = [0u64; N];
+            for i in 0..N-1 {
+                // C, r[i] = r[i] + a[i] * a[i]
+                r[i] = fa::mac(r[i], (a.0).0[i], (a.0).0[i], &mut carry1);
+                // Buffer with three location to store word-level multiplication results.
+                // One is used on each iteration to carry forward the upper word result.
+                let mut p = [0u64; 3];
+                for j in i+1..N {
+                    let (p1, p0, p1_prev) = (j%3, (j+1)%3, (j+2)%3);
+                    // p1, p0 = a[i] * a[j]
+                    p[p0] = fa::mul((a.0).0[i], (a.0).0[j], &mut p[p1]);
+                    // C, r[i] = r[j] + 2*p0 + 2*p1_prev
+                    r[j] = adc!(&mut carry1, r[j], p[p0], p[p0], p[p1_prev], p[p1_prev]);
+                }
+
+                // k = r[0] * q'[0]
+                let k = r[0].wrapping_mul(Self::INV);
+                // C, _ = r[0] + q[0]*k
+                fa::mac_discard(r[0], k, Self::MODULUS.0[0], &mut carry2);
+                for j in 1..N {
+                    // C, r[j-1] = q[j]*k + r[j] + C
+                    r[j - 1] = fa::mac_with_carry(r[j], k, Self::MODULUS.0[j], &mut carry2);
+                }
+
+                // Final carry word will not overflow due to the NO_CARRY rule.
+                // TODO(victor): Double check this to make sure it is true.
+                r[N-1] =  p[(N+2)%3] + p[(N+2)%3] + carry1 + carry2;
+            }
+
+            // i=N-1 case
+            // C, r[i] = r[i] + a[i] * a[i]
+            r[N-1] = fa::mac(r[N-1], (a.0).0[N-1], (a.0).0[N-1], &mut carry1);
+            // k = r[0] * q'[0]
+            let k = r[0].wrapping_mul(Self::INV);
+            // C, _ = r[0] + q[0]*k
+            fa::mac_discard(r[0], k, Self::MODULUS.0[0], &mut carry2);
+            for j in 1..N {
+                // C, r[j-1] = q[j]*k + r[j] + C
+                r[j - 1] = fa::mac_with_carry(r[j], k, Self::MODULUS.0[j], &mut carry2);
+            }
+
+            // Final carry word will not overflow due to the NO_CARRY rule.
+            // TODO(victor): Double check this to make sure it is true.
+            r[N-1] = carry1 + carry2;
+
+            (a.0).0 = r;
+            a.subtract_modulus();
+            return;
+        }
+
         let mut r = crate::const_helpers::MulBuffer::<N>::zeroed();
 
         let mut carry = 0;
@@ -516,7 +579,7 @@ impl<T, const N: usize> Fp<MontBackend<T, N>, N> {
                     lo[k] = mac_with_carry!(lo[k], tmp, modulus.0[j], &mut carry);
                 }
             });
-            hi[i] = adc!(hi[i], carry2, &mut carry);
+            hi[i] = adc!(&mut carry, hi[i], carry2);
             carry2 = carry;
         });
 
