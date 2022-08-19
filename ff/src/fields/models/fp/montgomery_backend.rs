@@ -183,9 +183,6 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             let mut carry1: u64 = 0;
             let mut carry2: u64 = 0;
             let mut r = [0u64; N];
-            // Buffer with three location to store word-level multiplication results.
-            // One is used on each iteration to carry forward the upper word result.
-            let mut p: u64 = 0;
 
             for i in 0..N-1 {
                 // C, r[i] = r[i] + a[i] * a[i]
@@ -194,14 +191,13 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                 // Incremental squaring operations.
                 // j=i+1 case for the loop below.
                 // carry2, p = a[i] * a[j]
-                p = fa::mac(0, (a.0).0[i], (a.0).0[i+1], &mut carry2);
+                let p = fa::mac(0, (a.0).0[i], (a.0).0[i+1], &mut carry2);
                 // C, r[i] = r[j] + 2*p0 + C
                 r[i+1] = adc!(&mut carry1, r[i+1], p, p);
 
                 for j in i+2..N {
-                    let (p1, p0, p_carry) = (j%3, (j+1)%3, (j+2)%3);
                     // carry2, p = carry2 + a[i] * a[j]
-                    p = fa::mac(carry2, (a.0).0[i], (a.0).0[j], &mut carry2);
+                    let p = fa::mac(carry2, (a.0).0[i], (a.0).0[j], &mut carry2);
                     // carry1, r[i] = r[j] + 2*p
                     r[j] = adc!(&mut carry1, r[j], p, p);
                 }
