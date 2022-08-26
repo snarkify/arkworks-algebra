@@ -1,7 +1,7 @@
 use ark_std::{vec, vec::Vec};
 
 /// adc with the option to accept a variable number of args.
-/// carry is given as the first arg, followed by any number of inputs. 
+/// carry is given as the first arg, followed by any number of inputs.
 // NOTE(victor) Need to look at the assembly output for this since it was likely written
 // specifically to ensure the compiler implements it with a particular instruction and I may have
 // borked that.

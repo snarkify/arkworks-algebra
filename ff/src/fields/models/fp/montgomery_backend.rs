@@ -138,6 +138,7 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
     #[inline]
     #[unroll_for_loops(12)]
     fn square_in_place(a: &mut Fp<MontBackend<Self, N>, N>) {
+        //unsafe { std::arch::asm!("# begin function square in place"); }
         if N == 1 {
             // We default to multiplying with `a` using the `Mul` impl
             // for the N == 1 case
@@ -159,6 +160,7 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         {
             // Checking the modulus at compile time
             if N <= 6 && Self::CAN_USE_NO_CARRY_OPT {
+                //unsafe { std::arch::asm!("# begin asm no-carry implementation"); }
                 #[rustfmt::skip]
                 match N {
                     2 => { ark_ff_asm::x86_64_asm_square!(2, (a.0).0); },
@@ -168,11 +170,12 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                     6 => { ark_ff_asm::x86_64_asm_square!(6, (a.0).0); },
                     _ => unsafe { ark_std::hint::unreachable_unchecked() },
                 };
+                //unsafe { std::arch::asm!("# end asm no-carry implementation"); }
                 a.subtract_modulus();
                 return;
             }
         }
-        
+
         // If we can use the NO_CARRY optimization (but don't have an assembly implementation), use
         // an implementation written in Rust.
         // TODO(victor): It appears that this condition is slightly wrong since NO_CARRY requires
@@ -180,22 +183,23 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         // https://hackmd.io/@gnark/modular_multiplication#Montgomery-squaring
         #[cfg(feature = "square-no-carry")]
         if Self::CAN_USE_NO_CARRY_OPT {
+            //unsafe { std::arch::asm!("# begin rust no-carry implementation"); }
             let mut carry1: u64 = 0;
             let mut carry2: u64 = 0;
             let mut r = [0u64; N];
 
-            for i in 0..N-1 {
+            for i in 0..N - 1 {
                 // C, r[i] = r[i] + a[i] * a[i]
                 r[i] = fa::mac(r[i], (a.0).0[i], (a.0).0[i], &mut carry1);
 
                 // Incremental squaring operations.
                 // j=i+1 case for the loop below.
                 // carry2, p = a[i] * a[j]
-                let p = fa::mac(0, (a.0).0[i], (a.0).0[i+1], &mut carry2);
+                let p = fa::mac(0, (a.0).0[i], (a.0).0[i + 1], &mut carry2);
                 // C, r[i] = r[j] + 2*p0 + C
-                r[i+1] = adc!(&mut carry1, r[i+1], p, p);
+                r[i + 1] = adc!(&mut carry1, r[i + 1], p, p);
 
-                for j in i+2..N {
+                for j in i + 2..N {
                     // carry2, p = carry2 + a[i] * a[j]
                     let p = fa::mac(carry2, (a.0).0[i], (a.0).0[j], &mut carry2);
                     // carry1, r[i] = r[j] + 2*p
@@ -215,12 +219,12 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                 }
 
                 // Final addition will not overflow due to the NO_CARRY rule.
-                r[N-1] =  carry1 + carry2;
+                r[N - 1] = carry1 + carry2;
             }
 
             // i=N-1 case for the loop above.
             // C, r[i] = r[i] + a[i] * a[i]
-            r[N-1] = fa::mac(r[N-1], (a.0).0[N-1], (a.0).0[N-1], &mut carry1);
+            r[N - 1] = fa::mac(r[N - 1], (a.0).0[N - 1], (a.0).0[N - 1], &mut carry1);
             // k = r[0] * q'[0]
             let k = r[0].wrapping_mul(Self::INV);
             // C, _ = r[0] + q[0]*k
@@ -231,13 +235,15 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             }
 
             // Final addition will not overflow due to the NO_CARRY rule.
-            r[N-1] = carry1 + carry2;
+            r[N - 1] = carry1 + carry2;
 
             (a.0).0 = r;
             a.subtract_modulus();
+            //unsafe { std::arch::asm!("# end rust no-carry implementation"); }
             return;
         }
 
+        //unsafe { std::arch::asm!("# begin rust square baseline implementation"); }
         let mut r = crate::const_helpers::MulBuffer::<N>::zeroed();
 
         let mut carry = 0;
@@ -275,6 +281,7 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         }
         (a.0).0.copy_from_slice(&r.b1);
         a.subtract_modulus();
+        //unsafe { std::arch::asm!("# end rust square baseline implementation"); }
     }
 
     fn inverse(a: &Fp<MontBackend<Self, N>, N>) -> Option<Fp<MontBackend<Self, N>, N>> {
