@@ -28,6 +28,7 @@ num-bigint = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 ark-test-curves = { version = "^0.3.0", path = "../test-curves", default-features = false, features = [ "bls12_381_curve", "mnt6_753"] }
+criterion = { version = "0.3.1" }
 
 [build-dependencies]
 rustc_version = "0.4"
@@ -38,3 +39,8 @@ std = [ "ark-std/std", "ark-serialize/std" ]
 parallel = [ "std", "rayon", "ark-std/parallel" ]
 asm = []
 square-no-carry = []
+
+[[bench]]
+name = "montgomery"
+path = "benches/montgomery.rs"
+harness = false
