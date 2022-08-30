@@ -1,11 +1,13 @@
+use ark_std::Zero;
+
 use super::quadratic_extension::*;
 use crate::{
     fields::{fp6_3over2::*, Field, Fp2, Fp2Config as Fp2ConfigTrait},
-    One,
+    CyclotomicMultSubgroup,
 };
 use core::{
     marker::PhantomData,
-    ops::{AddAssign, SubAssign},
+    ops::{AddAssign, Not, SubAssign},
 };
 
 type Fp2Config<P> = <<P as Fp12Config>::Fp6Config as Fp6Config>::Fp2Config;
@@ -52,40 +54,14 @@ impl<P: Fp12Config> QuadExtConfig for Fp12ConfigWrapper<P> {
     fn mul_base_field_by_frob_coeff(fe: &mut Self::BaseField, power: usize) {
         fe.mul_assign_by_fp2(Self::FROBENIUS_COEFF_C1[power % Self::DEGREE_OVER_BASE_PRIME_FIELD]);
     }
-
-    fn cyclotomic_exp(fe: &Fp12<P>, exponent: impl AsRef<[u64]>) -> Fp12<P> {
-        let mut res = QuadExtField::one();
-        let mut fe_inverse = *fe;
-        fe_inverse.conjugate();
-
-        let mut found_nonzero = false;
-        let naf = crate::biginteger::arithmetic::find_naf(exponent.as_ref());
-
-        for &value in naf.iter().rev() {
-            if found_nonzero {
-                res.cyclotomic_square_in_place();
-            }
-
-            if value != 0 {
-                found_nonzero = true;
-
-                if value > 0 {
-                    res *= fe;
-                } else {
-                    res *= &fe_inverse;
-                }
-            }
-        }
-        res
-    }
 }
 
 pub type Fp12<P> = QuadExtField<Fp12ConfigWrapper<P>>;
 
 impl<P: Fp12Config> Fp12<P> {
     pub fn mul_by_fp(&mut self, element: &<Self as Field>::BasePrimeField) {
-        self.c0.mul_by_fp(&element);
-        self.c1.mul_by_fp(&element);
+        self.c0.mul_by_fp(element);
+        self.c1.mul_by_fp(element);
     }
 
     pub fn mul_by_034(
@@ -99,12 +75,12 @@ impl<P: Fp12Config> Fp12<P> {
         let a2 = self.c0.c2 * c0;
         let a = Fp6::new(a0, a1, a2);
         let mut b = self.c1;
-        b.mul_by_01(&c3, &c4);
+        b.mul_by_01(c3, c4);
 
         let c0 = *c0 + c3;
         let c1 = c4;
         let mut e = self.c0 + &self.c1;
-        e.mul_by_01(&c0, &c1);
+        e.mul_by_01(&c0, c1);
         self.c1 = e - &(a + &b);
         self.c0 = a + &P::mul_fp6_by_nonresidue(&b);
     }
@@ -129,8 +105,35 @@ impl<P: Fp12Config> Fp12<P> {
         self.c0 = P::mul_fp6_by_nonresidue(&self.c0);
         self.c0.add_assign(&aa);
     }
+}
 
-    pub fn cyclotomic_square_in_place(&mut self) {
+// TODO: make `const fn` in 1.46.
+pub fn characteristic_square_mod_6_is_one(characteristic: &[u64]) -> bool {
+    // characteristic mod 6 = (a_0 + 2**64 * a_1 + ...) mod 6
+    //                      = a_0 mod 6 + (2**64 * a_1 mod 6) + (...) mod 6
+    //                      = a_0 mod 6 + (4 * a_1 mod 6) + (4 * ...) mod 6
+    let mut char_mod_6 = 0u64;
+    for (i, limb) in characteristic.iter().enumerate() {
+        char_mod_6 += if i == 0 {
+            limb % 6
+        } else {
+            (4 * (limb % 6)) % 6
+        };
+    }
+    (char_mod_6 * char_mod_6) % 6 == 1
+}
+
+impl<P: Fp12Config> CyclotomicMultSubgroup for Fp12<P> {
+    const INVERSE_IS_FAST: bool = true;
+
+    fn cyclotomic_inverse_in_place(&mut self) -> Option<&mut Self> {
+        self.is_zero().not().then(|| {
+            self.conjugate();
+            self
+        })
+    }
+
+    fn cyclotomic_square_in_place(&mut self) -> &mut Self {
         // Faster Squaring in the Cyclotomic Subgroup of Sixth Degree Extensions
         // - Robert Granger and Michael Scott
         //
@@ -202,32 +205,11 @@ impl<P: Fp12Config> Fp12<P> {
             *z5 += t3;
             z5.double_in_place();
             *z5 += &t3;
+            self
         } else {
-            self.square_in_place();
+            self.square_in_place()
         }
     }
-
-    pub fn cyclotomic_square(&self) -> Self {
-        let mut result = *self;
-        result.cyclotomic_square_in_place();
-        result
-    }
-}
-
-// TODO: make `const fn` in 1.46.
-pub fn characteristic_square_mod_6_is_one(characteristic: &[u64]) -> bool {
-    // characteristic mod 6 = (a_0 + 2**64 * a_1 + ...) mod 6
-    //                      = a_0 mod 6 + (2**64 * a_1 mod 6) + (...) mod 6
-    //                      = a_0 mod 6 + (4 * a_1 mod 6) + (4 * ...) mod 6
-    let mut char_mod_6 = 0u64;
-    for (i, limb) in characteristic.iter().enumerate() {
-        char_mod_6 += if i == 0 {
-            limb % 6
-        } else {
-            (4 * (limb % 6)) % 6
-        };
-    }
-    (char_mod_6 * char_mod_6) % 6 == 1
 }
 
 #[cfg(test)]

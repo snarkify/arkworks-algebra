@@ -1,7 +1,7 @@
 #![allow(unused)]
 #![allow(clippy::eq_op)]
 use ark_ff::{
-    fields::{FftField, Field, LegendreSymbol, PrimeField, SquareRootField},
+    fields::{FftField, Field, LegendreSymbol, PrimeField},
     Fp, MontBackend, MontConfig,
 };
 use ark_serialize::{buffer_bit_byte_size, Flags, SWFlags};
@@ -73,6 +73,50 @@ fn random_multiplication_tests<F: Field, R: Rng>(rng: &mut R) {
 
         assert_eq!(t0, t1);
         assert_eq!(t1, t2);
+    }
+}
+
+fn random_sum_of_products_tests<F: Field, R: Rng>(rng: &mut R) {
+    for _ in 0..ITERATIONS {
+        for length in 1..100 {
+            let a = (0..length).map(|_| F::rand(rng)).collect::<Vec<_>>();
+            let b = (0..length).map(|_| F::rand(rng)).collect::<Vec<_>>();
+            let result_1 = F::sum_of_products(&a, &b);
+            let result_2 = a.into_iter().zip(b).map(|(a, b)| a * b).sum::<F>();
+            assert_eq!(result_1, result_2, "length: {length}");
+        }
+    }
+}
+
+fn edge_case_sum_of_products_tests<F: PrimeField>() {
+    use ark_ff::BigInteger;
+    let mut a_max = F::ZERO.into_bigint();
+    for (i, limb) in a_max.as_mut().iter_mut().enumerate() {
+        if i == F::BigInt::NUM_LIMBS - 1 {
+            *limb = u64::MAX >> (64 - ((F::MODULUS_BIT_SIZE - 1) % 64));
+        } else {
+            *limb = u64::MAX;
+        }
+    }
+    let a_max = F::from_bigint(a_max).unwrap();
+    let b_max = -F::one(); // p - 1.
+    for length in 1..100 {
+        let a = vec![a_max; length];
+        let b = vec![b_max; length];
+        let result_1 = F::sum_of_products(&a, &b);
+        let result_2 = a.into_iter().zip(b).map(|(a, b)| a * b).sum::<F>();
+        assert_eq!(result_1, result_2, "length: {length}");
+    }
+    let two_inv = F::from(2u64).inverse().unwrap();
+    let neg_one = -F::one();
+    let a_max = neg_one * two_inv - F::one();
+    let b_max = neg_one * two_inv - F::one();
+    for length in 1..100 {
+        let a = vec![a_max; length];
+        let b = vec![b_max; length];
+        let result_1 = F::sum_of_products(&a, &b);
+        let result_2 = a.into_iter().zip(b).map(|(a, b)| a * b).sum::<F>();
+        assert_eq!(result_1, result_2, "length: {length}");
     }
 }
 
@@ -162,6 +206,7 @@ fn random_field_tests<F: Field>() {
     random_addition_tests::<F, _>(&mut rng);
     random_subtraction_tests::<F, _>(&mut rng);
     random_multiplication_tests::<F, _>(&mut rng);
+    random_sum_of_products_tests::<F, _>(&mut rng);
     random_inversion_tests::<F, _>(&mut rng);
     random_doubling_tests::<F, _>(&mut rng);
     random_squaring_tests::<F, _>(&mut rng);
@@ -190,7 +235,7 @@ fn random_field_tests<F: Field>() {
     }
 }
 
-fn random_sqrt_tests<F: SquareRootField>() {
+fn random_sqrt_tests<F: Field>() {
     let mut rng = ark_std::test_rng();
 
     for _ in 0..ITERATIONS {
@@ -232,6 +277,10 @@ pub fn from_str_test<F: PrimeField>() {
             let b = F::from(n);
 
             assert_eq!(a, b);
+            let c = F::from_str(&ark_std::format!("{}", a))
+                .map_err(|_| ())
+                .unwrap();
+            assert_eq!(a, c);
         }
     }
 
@@ -239,6 +288,7 @@ pub fn from_str_test<F: PrimeField>() {
     assert!(F::from_str("0").map_err(|_| ()).unwrap().is_zero());
     assert!(F::from_str("00").is_err());
     assert!(F::from_str("00000000000").is_err());
+    assert!(F::from_str("000000000007").is_err());
 }
 
 pub fn field_test<F: Field>(a: F, b: F) {
@@ -343,6 +393,9 @@ pub fn primefield_test<F: PrimeField>() {
     let one = F::one();
     assert_eq!(F::from(one.into_bigint()), one);
 
+    let mut rng = ark_std::test_rng();
+    edge_case_sum_of_products_tests::<F>();
+
     fft_field_test::<F>();
 }
 
@@ -360,6 +413,13 @@ pub fn montgomery_primefield_test<T: MontConfig<N>, const N: usize>() {
         modulus.bits()
     );
 
+    if &modulus % 4u8 == BigUint::from(3u8) {
+        assert_eq!(
+            BigUint::from(T::MODULUS_PLUS_ONE_DIV_FOUR.unwrap()),
+            (&modulus + 1u8) / 4u8
+        );
+    }
+
     let modulus_minus_one = &modulus - 1u8;
     assert_eq!(
         BigUint::from(Fp::<MontBackend<T, N>, N>::MODULUS_MINUS_ONE_DIV_TWO),
@@ -367,7 +427,7 @@ pub fn montgomery_primefield_test<T: MontConfig<N>, const N: usize>() {
     );
 
     let mut two_adicity = 0;
-    let mut trace = modulus_minus_one.clone();
+    let mut trace = modulus_minus_one;
     while trace.is_even() {
         trace /= 2u8;
         two_adicity += 1;
@@ -385,7 +445,7 @@ pub fn montgomery_primefield_test<T: MontConfig<N>, const N: usize>() {
     assert_eq!(two_adic_root_of_unity, generator.modpow(&trace, &modulus));
     match (T::SMALL_SUBGROUP_BASE, T::SMALL_SUBGROUP_BASE_ADICITY) {
         (Some(base), Some(adicity)) => {
-            let mut e = generator.clone();
+            let mut e = generator;
             for _i in 0..adicity {
                 e = e.modpow(&base.into(), &modulus)
             }
@@ -397,7 +457,7 @@ pub fn montgomery_primefield_test<T: MontConfig<N>, const N: usize>() {
     }
 }
 
-pub fn sqrt_field_test<F: SquareRootField>(elem: F) {
+pub fn sqrt_field_test<F: Field>(elem: F) {
     let square = elem.square();
     let sqrt = square.sqrt().unwrap();
     assert!(sqrt == elem || sqrt == -elem);

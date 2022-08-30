@@ -1,11 +1,14 @@
 use crate::{
-    models::{ModelParameters, SWModelParameters},
+    models::{short_weierstrass::SWCurveConfig, CurveConfig},
     PairingEngine,
 };
-use ark_ff::fields::{
-    fp3::Fp3Config,
-    fp6_2over3::{Fp6, Fp6Config},
-    BitIteratorBE, Field, PrimeField, SquareRootField,
+use ark_ff::{
+    fields::{
+        fp3::Fp3Config,
+        fp6_2over3::{Fp6, Fp6Config},
+        BitIteratorBE, Field, PrimeField,
+    },
+    CyclotomicMultSubgroup,
 };
 use num_traits::One;
 
@@ -24,13 +27,13 @@ pub trait BW6Parameters: 'static + Eq + PartialEq {
     const ATE_LOOP_COUNT_2: &'static [i8];
     const ATE_LOOP_COUNT_2_IS_NEGATIVE: bool;
     const TWIST_TYPE: TwistType;
-    type Fp: PrimeField + SquareRootField + Into<<Self::Fp as PrimeField>::BigInt>;
+    type Fp: PrimeField + Into<<Self::Fp as PrimeField>::BigInt>;
     type Fp3Config: Fp3Config<Fp = Self::Fp>;
     type Fp6Config: Fp6Config<Fp3Config = Self::Fp3Config>;
-    type G1Parameters: SWModelParameters<BaseField = Self::Fp>;
-    type G2Parameters: SWModelParameters<
+    type G1Parameters: SWCurveConfig<BaseField = Self::Fp>;
+    type G2Parameters: SWCurveConfig<
         BaseField = Self::Fp,
-        ScalarField = <Self::G1Parameters as ModelParameters>::ScalarField,
+        ScalarField = <Self::G1Parameters as CurveConfig>::ScalarField,
     >;
 }
 
@@ -210,7 +213,7 @@ impl<P: BW6Parameters> BW6<P> {
 }
 
 impl<P: BW6Parameters> PairingEngine for BW6<P> {
-    type Fr = <P::G1Parameters as ModelParameters>::ScalarField;
+    type Fr = <P::G1Parameters as CurveConfig>::ScalarField;
     type G1Projective = G1Projective<P>;
     type G1Affine = G1Affine<P>;
     type G1Prepared = G1Prepared<P>;
@@ -239,7 +242,7 @@ impl<P: BW6Parameters> PairingEngine for BW6<P> {
         // f_{u+1,Q}(P)
         let mut f_1 = Self::Fqk::one();
 
-        for i in BitIteratorBE::new(P::ATE_LOOP_COUNT_1).skip(1) {
+        for i in BitIteratorBE::without_leading_zeros(P::ATE_LOOP_COUNT_1).skip(1) {
             f_1.square_in_place();
 
             for (p, ref mut coeffs) in &mut pairs_1 {

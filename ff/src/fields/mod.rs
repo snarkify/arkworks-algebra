@@ -1,4 +1,4 @@
-use crate::{biginteger::BigInteger, fields::utils::k_adicity, FromBytes, ToBytes, UniformRand};
+use crate::{biginteger::BigInteger, fields::utils::k_adicity, UniformRand};
 use ark_serialize::{
     CanonicalDeserialize, CanonicalDeserializeWithFlags, CanonicalSerialize,
     CanonicalSerializeWithFlags, EmptyFlags, Flags,
@@ -26,12 +26,60 @@ pub mod arithmetic;
 pub mod models;
 pub use self::models::*;
 
+pub mod field_hashers;
+
 #[cfg(feature = "parallel")]
 use ark_std::cmp::max;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-/// The interface for a generic field.
+/// The interface for a generic field.  
+/// Types implementing [`Field`] support common field operations such as addition, subtraction, multiplication, and inverses.
+///
+/// ## Defining your own field
+/// To demonstrate the various field operations, we can first define a prime ordered field $\mathbb{F}_{p}$ with $p = 17$. When defining a field $\mathbb{F}_p$, we need to provide the modulus(the $p$ in $\mathbb{F}_p$) and a generator. Recall that a generator $g \in \mathbb{F}_p$ is a field element whose powers comprise the entire field: $\mathbb{F}_p =\\{g, g^1, \ldots, g^{p-1}\\}$.
+/// We can then manually construct the field element associated with an integer with `Fp::from` and perform field addition, subtraction, multiplication, and inversion on it.
+/// ```rust
+/// use ark_ff::fields::{Field, Fp64, MontBackend, MontConfig};
+///
+/// #[derive(MontConfig)]
+/// #[modulus = "17"]
+/// #[generator = "3"]
+/// pub struct FqConfig;
+/// pub type Fq = Fp64<MontBackend<FqConfig, 1>>;
+///
+/// let a = Fq::from(9);
+/// let b = Fq::from(10);
+///
+/// assert_eq!(a, Fq::from(26));          // 26 =  9 mod 17
+/// assert_eq!(a - b, Fq::from(16));      // -1 = 16 mod 17
+/// assert_eq!(a + b, Fq::from(2));       // 19 =  2 mod 17
+/// assert_eq!(a * b, Fq::from(5));       // 90 =  5 mod 17
+/// assert_eq!(a.square(), Fq::from(13)); // 81 = 13 mod 17
+/// assert_eq!(b.double(), Fq::from(3));  // 20 =  3 mod 17
+/// assert_eq!(a / b, a * b.inverse().unwrap()); // need to unwrap since `b` could be 0 which is not invertible
+/// ```
+///
+/// ## Using pre-defined fields
+/// In the following example, we’ll use the field associated with the BLS12-381 pairing-friendly group.
+/// ```rust
+/// use ark_ff::Field;
+/// use ark_test_curves::bls12_381::Fq as F;
+/// use ark_std::{One, UniformRand, test_rng};
+///
+/// let mut rng = test_rng();
+/// // Let's sample uniformly random field elements:
+/// let a = F::rand(&mut rng);
+/// let b = F::rand(&mut rng);
+///
+/// let c = a + b;
+/// let d = a - b;
+/// assert_eq!(c + d, a.double());
+///
+/// let e = c * d;
+/// assert_eq!(e, a.square() - b.square());         // (a + b)(a - b) = a^2 - b^2
+/// assert_eq!(a.inverse().unwrap() * a, F::one()); // Euler-Fermat theorem tells us: a * a^{-1} = 1 mod p
+/// ```
 pub trait Field:
     'static
     + Copy
@@ -54,8 +102,6 @@ pub trait Field:
     + CanonicalSerializeWithFlags
     + CanonicalDeserialize
     + CanonicalDeserializeWithFlags
-    + ToBytes
-    + FromBytes
     + Add<Self, Output = Self>
     + Sub<Self, Output = Self>
     + Mul<Self, Output = Self>
@@ -84,7 +130,16 @@ pub trait Field:
     + From<bool>
 {
     type BasePrimeField: PrimeField;
+
     type BasePrimeFieldIter: Iterator<Item = Self::BasePrimeField>;
+
+    /// Determines the algorithm for computing square roots.
+    const SQRT_PRECOMP: Option<SqrtPrecomputation<Self>>;
+
+    /// The additive identity of the field.
+    const ZERO: Self;
+    /// The multiplicative identity of the field.
+    const ONE: Self;
 
     /// Returns the characteristic of the field,
     /// in little-endian representation.
@@ -101,6 +156,16 @@ pub trait Field:
     /// Convert a slice of base prime field elements into a field element.
     /// If the slice length != Self::extension_degree(), must return None.
     fn from_base_prime_field_elems(elems: &[Self::BasePrimeField]) -> Option<Self>;
+
+    /// Constructs a field element from a single base prime field elements.
+    /// ```
+    /// # use ark_ff::Field;
+    /// # use ark_test_curves::bls12_381::Fq as F;
+    /// # use ark_test_curves::bls12_381::Fq2 as F2;
+    /// # use ark_std::One;
+    /// assert_eq!(F2::from_base_prime_field(F::one()), F2::one());
+    /// ```
+    fn from_base_prime_field(elem: Self::BasePrimeField) -> Self;
 
     /// Returns `self + self`.
     #[must_use]
@@ -126,6 +191,29 @@ pub trait Field:
     /// from a hash-function or RNG output.
     fn from_random_bytes_with_flags<F: Flags>(bytes: &[u8]) -> Option<(Self, F)>;
 
+    /// Returns a `LegendreSymbol`, which indicates whether this field element
+    /// is  1 : a quadratic residue
+    ///  0 : equal to 0
+    /// -1 : a quadratic non-residue
+    fn legendre(&self) -> LegendreSymbol;
+
+    /// Returns the square root of self, if it exists.
+    #[must_use]
+    fn sqrt(&self) -> Option<Self> {
+        match Self::SQRT_PRECOMP {
+            Some(tv) => tv.sqrt(self),
+            None => unimplemented!(),
+        }
+    }
+
+    /// Sets `self` to be the square root of `self`, if it exists.
+    fn sqrt_in_place(&mut self) -> Option<&mut Self> {
+        (*self).sqrt().map(|sqrt| {
+            *self = sqrt;
+            self
+        })
+    }
+
     /// Returns `self * self`.
     #[must_use]
     fn square(&self) -> Self;
@@ -140,6 +228,12 @@ pub trait Field:
     /// If `self.inverse().is_none()`, this just returns `None`. Otherwise, it sets
     /// `self` to `self.inverse().unwrap()`.
     fn inverse_in_place(&mut self) -> Option<&mut Self>;
+
+    /// Returns `sum([a_i * b_i])`.
+    #[inline]
+    fn sum_of_products(a: &[Self], b: &[Self]) -> Self {
+        cfg_iter!(a).zip(b).map(|(a, b)| *a * b).sum()
+    }
 
     /// Exponentiates this element by a power of the base prime modulus via
     /// the Frobenius automorphism.
@@ -178,6 +272,130 @@ pub trait Field:
         }
         Some(res)
     }
+}
+
+/// Fields that have a cyclotomic multiplicative subgroup, and which can
+/// leverage efficient inversion and squaring algorithms for elements in this subgroup.
+/// If a field has multiplicative order p^d - 1, the cyclotomic subgroups refer to subgroups of order φ_n(p),
+/// for any n < d, where φ_n is the [n-th cyclotomic polynomial](https://en.wikipedia.org/wiki/Cyclotomic_polynomial).
+///
+/// ## Note
+///
+/// Note that this trait is unrelated to the `Group` trait from the `ark_ec` crate. That trait
+/// denotes an *additive* group, while this trait denotes a *multiplicative* group.
+pub trait CyclotomicMultSubgroup: Field {
+    /// Is the inverse fast to compute? For example, in quadratic extensions, the inverse
+    /// can be computed at the cost of negating one coordinate, which is much faster than
+    /// standard inversion.
+    /// By default this is `false`, but should be set to `true` for quadratic extensions.
+    const INVERSE_IS_FAST: bool = false;
+
+    /// Compute a square in the cyclotomic subgroup. By default this is computed using [`Field::square`], but for
+    /// degree 12 extensions, this can be computed faster than normal squaring.
+    ///
+    /// # Warning
+    ///
+    /// This method should be invoked only when `self` is in the cyclotomic subgroup.
+    fn cyclotomic_square(&self) -> Self {
+        let mut result = *self;
+        *result.cyclotomic_square_in_place()
+    }
+
+    /// Square `self` in place. By default this is computed using
+    /// [`Field::square_in_place`], but for degree 12 extensions,
+    /// this can be computed faster than normal squaring.
+    ///
+    /// # Warning
+    ///
+    /// This method should be invoked only when `self` is in the cyclotomic subgroup.
+    fn cyclotomic_square_in_place(&mut self) -> &mut Self {
+        self.square_in_place()
+    }
+
+    /// Compute the inverse of `self`. See [`Self::INVERSE_IS_FAST`] for details.
+    /// Returns [`None`] if `self.is_zero()`, and [`Some`] otherwise.
+    ///
+    /// # Warning
+    ///
+    /// This method should be invoked only when `self` is in the cyclotomic subgroup.
+    fn cyclotomic_inverse(&self) -> Option<Self> {
+        let mut result = *self;
+        result.cyclotomic_inverse_in_place().copied()
+    }
+
+    /// Compute the inverse of `self`. See [`Self::INVERSE_IS_FAST`] for details.
+    /// Returns [`None`] if `self.is_zero()`, and [`Some`] otherwise.
+    ///
+    /// # Warning
+    ///
+    /// This method should be invoked only when `self` is in the cyclotomic subgroup.
+    fn cyclotomic_inverse_in_place(&mut self) -> Option<&mut Self> {
+        self.inverse_in_place()
+    }
+
+    /// Compute a cyclotomic exponentiation of `self` with respect to `e`.
+    ///
+    /// # Warning
+    ///
+    /// This method should be invoked only when `self` is in the cyclotomic subgroup.
+    fn cyclotomic_exp(&self, e: impl AsRef<[u64]>) -> Self {
+        let mut result = *self;
+        result.cyclotomic_exp_in_place(e);
+        result
+    }
+
+    /// Set `self` to be the result of exponentiating [`self`] by `e`,
+    /// using efficient cyclotomic algorithms.
+    ///
+    /// # Warning
+    ///
+    /// This method should be invoked only when `self` is in the cyclotomic subgroup.
+    fn cyclotomic_exp_in_place(&mut self, e: impl AsRef<[u64]>) {
+        if self.is_zero() {
+            return;
+        }
+
+        if Self::INVERSE_IS_FAST {
+            // We only use NAF-based exponentiation if inverses are fast to compute.
+            let naf = crate::biginteger::arithmetic::find_naf(e.as_ref());
+            exp_loop(self, naf.into_iter().rev())
+        } else {
+            exp_loop(
+                self,
+                BitIteratorBE::without_leading_zeros(e.as_ref()).map(|e| e as i8),
+            )
+        };
+    }
+}
+
+/// Helper function to calculate the double-and-add loop for exponentiation.
+fn exp_loop<F: CyclotomicMultSubgroup, I: Iterator<Item = i8>>(f: &mut F, e: I) {
+    // If the inverse is fast and we're using naf, we compute the inverse of the base.
+    // Otherwise we do nothing with the variable, so we default it to one.
+    let self_inverse = if F::INVERSE_IS_FAST {
+        f.cyclotomic_inverse().unwrap() // The inverse must exist because self is not zero.
+    } else {
+        F::one()
+    };
+    let mut res = F::one();
+    let mut found_nonzero = false;
+    for value in e {
+        if found_nonzero {
+            res.cyclotomic_square_in_place();
+        }
+
+        if value != 0 {
+            found_nonzero = true;
+
+            if value > 0 {
+                res *= &*f;
+            } else if F::INVERSE_IS_FAST {
+                // only use naf if inversion is fast.
+                res *= &self_inverse;
+            }
+        }
+    }
+    *f = res;
 }
 
 /// The interface for fields that are able to be used in FFTs.
@@ -264,7 +482,27 @@ pub trait FftField: Field {
     }
 }
 
-/// The interface for a prime field, i.e. the field of integers modulo a prime p.
+/// The interface for a prime field, i.e. the field of integers modulo a prime $p$.  
+/// In the following example we'll use the prime field underlying the BLS12-381 G1 curve.
+/// ```rust
+/// use ark_ff::{Field, PrimeField, BigInteger};
+/// use ark_test_curves::bls12_381::Fq as F;
+/// use ark_std::{One, Zero, UniformRand, test_rng};
+///
+/// let mut rng = test_rng();
+/// let a = F::rand(&mut rng);
+/// // We can access the prime modulus associated with `F`:
+/// let modulus = <F as PrimeField>::MODULUS;
+/// assert_eq!(a.pow(&modulus), a); // the Euler-Fermat theorem tells us: a^{p-1} = 1 mod p
+///
+/// // We can convert field elements to integers in the range [0, MODULUS - 1]:
+/// let one: num_bigint::BigUint = F::one().into();
+/// assert_eq!(one, num_bigint::BigUint::one());
+///
+/// // We can construct field elements from an arbitrary sequence of bytes:
+/// let n = F::from_le_bytes_mod_order(&modulus.to_bytes_le());
+/// assert_eq!(n, F::zero());
+/// ```
 pub trait PrimeField:
     Field<BasePrimeField = Self>
     + FftField
@@ -296,7 +534,7 @@ pub trait PrimeField:
     fn from_bigint(repr: Self::BigInt) -> Option<Self>;
 
     /// Converts an element of the prime field into an integer in the range 0..(p - 1).
-    fn into_bigint(&self) -> Self::BigInt;
+    fn into_bigint(self) -> Self::BigInt;
 
     /// Reads bytes in big-endian, and converts them to a field element.
     /// If the integer represented by `bytes` is larger than the modulus `p`, this method
@@ -336,30 +574,13 @@ pub trait PrimeField:
     }
 }
 
-/// The interface for a field that supports an efficient square-root operation.
-pub trait SquareRootField: Field {
-    /// Returns a `LegendreSymbol`, which indicates whether this field element
-    /// is  
-    /// - 1: a quadratic residue
-    /// - 0: equal to 0
-    /// - -1: a quadratic non-residue
-    fn legendre(&self) -> LegendreSymbol;
-
-    /// Returns the square root of self, if it exists.
-    #[must_use]
-    fn sqrt(&self) -> Option<Self>;
-
-    /// Sets `self` to be the square root of `self`, if it exists.
-    fn sqrt_in_place(&mut self) -> Option<&mut Self>;
-}
-
 /// Indication of the field element's quadratic residuosity
 ///
 /// # Examples
 /// ```
 /// # use ark_std::test_rng;
 /// # use ark_std::UniformRand;
-/// # use ark_test_curves::{LegendreSymbol, Field, SquareRootField, bls12_381::Fq as Fp};
+/// # use ark_test_curves::{LegendreSymbol, Field, bls12_381::Fq as Fp};
 /// let a: Fp = Fp::rand(&mut test_rng());
 /// let b = a.square();
 /// assert_eq!(b.legendre(), LegendreSymbol::QuadraticResidue);
@@ -378,7 +599,7 @@ impl LegendreSymbol {
     /// ```
     /// # use ark_std::test_rng;
     /// # use ark_std::UniformRand;
-    /// # use ark_test_curves::{LegendreSymbol, Field, SquareRootField, bls12_381::Fq as Fp};
+    /// # use ark_test_curves::{LegendreSymbol, Field, bls12_381::Fq as Fp};
     /// let a: Fp = Fp::rand(&mut test_rng());
     /// let b: Fp = a.square();
     /// assert!(!b.legendre().is_zero());
@@ -391,7 +612,7 @@ impl LegendreSymbol {
     ///
     /// # Examples
     /// ```
-    /// # use ark_test_curves::{Fp2Config, LegendreSymbol, SquareRootField, bls12_381::{Fq, Fq2Config}};
+    /// # use ark_test_curves::{Fp2Config, Field, LegendreSymbol, bls12_381::{Fq, Fq2Config}};
     /// let a: Fq = Fq2Config::NONRESIDUE;
     /// assert!(a.legendre().is_qnr());
     /// ```
@@ -405,13 +626,101 @@ impl LegendreSymbol {
     /// # use ark_std::test_rng;
     /// # use ark_test_curves::bls12_381::Fq as Fp;
     /// # use ark_std::UniformRand;
-    /// # use ark_ff::{LegendreSymbol, Field, SquareRootField};
+    /// # use ark_ff::{LegendreSymbol, Field};
     /// let a: Fp = Fp::rand(&mut test_rng());
     /// let b: Fp = a.square();
     /// assert!(b.legendre().is_qr());
     /// ```
     pub fn is_qr(&self) -> bool {
         *self == LegendreSymbol::QuadraticResidue
+    }
+}
+
+/// Precomputation that makes computing square roots faster
+/// A particular variant should only be instantiated if the modulus satisfies
+/// the corresponding condition.
+#[non_exhaustive]
+pub enum SqrtPrecomputation<F: Field> {
+    // Tonelli-Shanks algorithm works for all elements, no matter what the modulus is.
+    TonelliShanks {
+        two_adicity: u32,
+        quadratic_nonresidue_to_trace: F,
+        trace_of_modulus_minus_one_div_two: &'static [u64],
+    },
+    /// To be used when the modulus is 3 mod 4.
+    Case3Mod4 {
+        modulus_plus_one_div_four: &'static [u64],
+    },
+}
+
+impl<F: Field> SqrtPrecomputation<F> {
+    fn sqrt(&self, elem: &F) -> Option<F> {
+        match self {
+            Self::TonelliShanks {
+                two_adicity,
+                quadratic_nonresidue_to_trace,
+                trace_of_modulus_minus_one_div_two,
+            } => {
+                // https://eprint.iacr.org/2012/685.pdf (page 12, algorithm 5)
+                // Actually this is just normal Tonelli-Shanks; since `P::Generator`
+                // is a quadratic non-residue, `P::ROOT_OF_UNITY = P::GENERATOR ^ t`
+                // is also a quadratic non-residue (since `t` is odd).
+                if elem.is_zero() {
+                    return Some(F::zero());
+                }
+                // Try computing the square root (x at the end of the algorithm)
+                // Check at the end of the algorithm if x was a square root
+                // Begin Tonelli-Shanks
+                let mut z = *quadratic_nonresidue_to_trace;
+                let mut w = elem.pow(trace_of_modulus_minus_one_div_two);
+                let mut x = w * elem;
+                let mut b = x * &w;
+
+                let mut v = *two_adicity as usize;
+
+                while !b.is_one() {
+                    let mut k = 0usize;
+
+                    let mut b2k = b;
+                    while !b2k.is_one() {
+                        // invariant: b2k = b^(2^k) after entering this loop
+                        b2k.square_in_place();
+                        k += 1;
+                    }
+
+                    if k == (*two_adicity as usize) {
+                        // We are in the case where self^(T * 2^k) = x^(P::MODULUS - 1) = 1,
+                        // which means that no square root exists.
+                        return None;
+                    }
+                    let j = v - k;
+                    w = z;
+                    for _ in 1..j {
+                        w.square_in_place();
+                    }
+
+                    z = w.square();
+                    b *= &z;
+                    x *= &w;
+                    v = k;
+                }
+                // Is x the square root? If so, return it.
+                if x.square() == *elem {
+                    return Some(x);
+                } else {
+                    // Consistency check that if no square root is found,
+                    // it is because none exists.
+                    debug_assert!(!matches!(elem.legendre(), LegendreSymbol::QuadraticResidue));
+                    None
+                }
+            },
+            Self::Case3Mod4 {
+                modulus_plus_one_div_four,
+            } => {
+                let result = elem.pow(modulus_plus_one_div_four.as_ref());
+                (result.square() == *elem).then_some(result)
+            },
+        }
     }
 }
 

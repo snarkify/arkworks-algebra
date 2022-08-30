@@ -1,6 +1,6 @@
 //! Work with sparse and dense polynomials.
 
-use crate::{EvaluationDomain, Evaluations, Polynomial, UVPolynomial};
+use crate::{DenseUVPolynomial, EvaluationDomain, Evaluations, Polynomial};
 use ark_ff::{FftField, Field, Zero};
 use ark_std::{borrow::Cow, convert::TryInto, vec::Vec};
 use DenseOrSparsePolynomial::*;
@@ -44,9 +44,9 @@ impl<'a, F: Field> From<&'a SparsePolynomial<F>> for DenseOrSparsePolynomial<'a,
     }
 }
 
-impl<'a, F: Field> Into<DensePolynomial<F>> for DenseOrSparsePolynomial<'a, F> {
-    fn into(self) -> DensePolynomial<F> {
-        match self {
+impl<'a, F: Field> From<DenseOrSparsePolynomial<'a, F>> for DensePolynomial<F> {
+    fn from(other: DenseOrSparsePolynomial<'a, F>) -> DensePolynomial<F> {
+        match other {
             DPolynomial(p) => p.into_owned(),
             SPolynomial(p) => p.into_owned().into(),
         }

@@ -20,17 +20,17 @@ extern crate derivative;
 extern crate ark_std;
 
 use ark_ff::{
-    bytes::{FromBytes, ToBytes},
-    fields::{Field, PrimeField, SquareRootField},
+    fields::{Field, PrimeField},
     UniformRand,
 };
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::{
     fmt::{Debug, Display},
     hash::Hash,
-    ops::{Add, AddAssign, MulAssign, Neg, Sub, SubAssign},
+    ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     vec::Vec,
 };
+use msm::VariableBaseMSM;
 use num_traits::Zero;
 use zeroize::Zeroize;
 
@@ -38,8 +38,6 @@ pub mod models;
 pub use self::models::*;
 
 pub mod glv;
-
-pub mod group;
 
 pub mod msm;
 
@@ -52,13 +50,15 @@ pub mod wnaf;
 /// how to compute a pairing over a pairing-friendly curve.
 pub trait PairingEngine: Sized + 'static + Copy + Debug + Sync + Send + Eq + PartialEq {
     /// This is the scalar field of the G1/G2 groups.
-    type Fr: PrimeField + SquareRootField;
+    type Fr: PrimeField;
 
     /// The projective representation of an element in G1.
     type G1Projective: ProjectiveCurve<BaseField = Self::Fq, ScalarField = Self::Fr, Affine = Self::G1Affine>
         + From<Self::G1Affine>
         + Into<Self::G1Affine>
-        + MulAssign<Self::Fr>; // needed due to https://github.com/rust-lang/rust/issues/69640
+        // needed due to https://github.com/rust-lang/rust/issues/69640
+        + MulAssign<Self::Fr>
+        + VariableBaseMSM<MSMBase = Self::G1Affine, Scalar = Self::Fr>;
 
     /// The affine representation of an element in G1.
     type G1Affine: AffineCurve<BaseField = Self::Fq, ScalarField = Self::Fr, Projective = Self::G1Projective>
@@ -67,13 +67,15 @@ pub trait PairingEngine: Sized + 'static + Copy + Debug + Sync + Send + Eq + Par
         + Into<Self::G1Prepared>;
 
     /// A G1 element that has been preprocessed for use in a pairing.
-    type G1Prepared: ToBytes + Default + Clone + Send + Sync + Debug + From<Self::G1Affine>;
+    type G1Prepared: Default + Clone + Send + Sync + Debug + From<Self::G1Affine>;
 
     /// The projective representation of an element in G2.
     type G2Projective: ProjectiveCurve<BaseField = Self::Fqe, ScalarField = Self::Fr, Affine = Self::G2Affine>
         + From<Self::G2Affine>
         + Into<Self::G2Affine>
-        + MulAssign<Self::Fr>; // needed due to https://github.com/rust-lang/rust/issues/69640
+        // needed due to https://github.com/rust-lang/rust/issues/69640
+        + MulAssign<Self::Fr>
+        + VariableBaseMSM<MSMBase = Self::G2Affine, Scalar = Self::Fr>;
 
     /// The affine representation of an element in G2.
     type G2Affine: AffineCurve<BaseField = Self::Fqe, ScalarField = Self::Fr, Projective = Self::G2Projective>
@@ -82,13 +84,13 @@ pub trait PairingEngine: Sized + 'static + Copy + Debug + Sync + Send + Eq + Par
         + Into<Self::G2Prepared>;
 
     /// A G2 element that has been preprocessed for use in a pairing.
-    type G2Prepared: ToBytes + Default + Clone + Send + Sync + Debug + From<Self::G2Affine>;
+    type G2Prepared: Default + Clone + Send + Sync + Debug + From<Self::G2Affine>;
 
     /// The base field that hosts G1.
-    type Fq: PrimeField + SquareRootField;
+    type Fq: PrimeField;
 
     /// The extension field that hosts G2.
-    type Fqe: SquareRootField;
+    type Fqe: Field;
 
     /// The extension field that hosts the target group of the pairing.
     type Fqk: Field;
@@ -131,8 +133,6 @@ pub trait ProjectiveCurve:
     Eq
     + 'static
     + Sized
-    + ToBytes
-    + FromBytes
     + CanonicalSerialize
     + CanonicalDeserialize
     + Copy
@@ -149,22 +149,25 @@ pub trait ProjectiveCurve:
     + Neg<Output = Self>
     + Add<Self, Output = Self>
     + Sub<Self, Output = Self>
+    + Mul<<Self as ProjectiveCurve>::ScalarField, Output = Self>
     + AddAssign<Self>
     + SubAssign<Self>
     + MulAssign<<Self as ProjectiveCurve>::ScalarField>
     + for<'a> Add<&'a Self, Output = Self>
     + for<'a> Sub<&'a Self, Output = Self>
+    + for<'a> Mul<&'a <Self as ProjectiveCurve>::ScalarField, Output = Self>
     + for<'a> AddAssign<&'a Self>
     + for<'a> SubAssign<&'a Self>
+    + for<'a> MulAssign<&'a <Self as ProjectiveCurve>::ScalarField>
     + core::iter::Sum<Self>
     + for<'a> core::iter::Sum<&'a Self>
     + From<<Self as ProjectiveCurve>::Affine>
 {
-    type Parameters: ModelParameters<ScalarField = Self::ScalarField, BaseField = Self::BaseField>;
-    type ScalarField: PrimeField + SquareRootField;
+    type Config: CurveConfig<ScalarField = Self::ScalarField, BaseField = Self::BaseField>;
+    type ScalarField: PrimeField;
     type BaseField: Field;
     type Affine: AffineCurve<
-            Parameters = Self::Parameters,
+            Config = Self::Config,
             Projective = Self,
             ScalarField = Self::ScalarField,
             BaseField = Self::BaseField,
@@ -204,8 +207,8 @@ pub trait ProjectiveCurve:
     fn double_in_place(&mut self) -> &mut Self;
 
     /// Converts self into the affine representation.
-    fn into_affine(&self) -> Self::Affine {
-        (*self).into()
+    fn into_affine(self) -> Self::Affine {
+        self.into()
     }
 
     /// Sets `self` to be `self + other`, where `other: Self::Affine`.
@@ -220,7 +223,7 @@ pub trait ProjectiveCurve:
     fn add_assign_mixed(&mut self, other: &Self::Affine);
 
     /// Performs scalar multiplication of this element.
-    fn mul<S: AsRef<[u64]>>(self, other: S) -> Self;
+    fn mul_bigint<S: AsRef<[u64]>>(self, other: S) -> Self;
 }
 
 /// Affine representation of an elliptic curve point guaranteed to be
@@ -229,8 +232,6 @@ pub trait AffineCurve:
     Eq
     + 'static
     + Sized
-    + ToBytes
-    + FromBytes
     + CanonicalSerialize
     + CanonicalDeserialize
     + Copy
@@ -246,21 +247,23 @@ pub trait AffineCurve:
     + Neg<Output = Self>
     + Zeroize
     + core::iter::Sum<Self>
+    + Mul<Self::ScalarField, Output = Self::Projective>
+    + for<'a> Mul<&'a Self::ScalarField, Output = Self::Projective>
     + for<'a> core::iter::Sum<&'a Self>
     + From<<Self as AffineCurve>::Projective>
 {
-    type Parameters: ModelParameters<ScalarField = Self::ScalarField, BaseField = Self::BaseField>;
+    type Config: CurveConfig<ScalarField = Self::ScalarField, BaseField = Self::BaseField>;
 
     /// The group defined by this curve has order `h * r` where `r` is a large
     /// prime. `Self::ScalarField` is the prime field defined by `r`
-    type ScalarField: PrimeField + SquareRootField + Into<<Self::ScalarField as PrimeField>::BigInt>;
+    type ScalarField: PrimeField + Into<<Self::ScalarField as PrimeField>::BigInt>;
 
     /// The finite field over which this curve is defined.
     type BaseField: Field;
 
     /// The projective representation of points on this curve.
     type Projective: ProjectiveCurve<
-            Parameters = Self::Parameters,
+            Config = Self::Config,
             Affine = Self,
             ScalarField = Self::ScalarField,
             BaseField = Self::BaseField,
@@ -268,13 +271,16 @@ pub trait AffineCurve:
         + Into<Self>
         + MulAssign<Self::ScalarField>; // needed due to https://github.com/rust-lang/rust/issues/69640
 
+    /// Returns the x and y coordinates of this affine point
+    fn xy(&self) -> Option<(&Self::BaseField, &Self::BaseField)>;
+
     /// Returns a fixed generator of unknown exponent.
     #[must_use]
     fn prime_subgroup_generator() -> Self;
 
     /// Converts self into the projective representation.
-    fn into_projective(&self) -> Self::Projective {
-        (*self).into()
+    fn into_projective(self) -> Self::Projective {
+        self.into()
     }
 
     /// Returns a group element if the set of bytes forms a valid group element,
@@ -284,7 +290,13 @@ pub trait AffineCurve:
 
     /// Performs scalar multiplication of this element with mixed addition.
     #[must_use]
-    fn mul<S: Into<<Self::ScalarField as PrimeField>::BigInt>>(&self, by: S) -> Self::Projective;
+    fn mul_bigint<S: AsRef<[u64]>>(&self, by: S) -> Self::Projective;
+
+    /// Performs cofactor clearing.
+    /// The default method is simply to multiply by the cofactor.
+    /// For some curve families more efficient methods exist.
+    #[must_use]
+    fn clear_cofactor(&self) -> Self;
 
     /// Multiplies this element by the cofactor and output the
     /// resulting projective element.
@@ -301,7 +313,8 @@ pub trait AffineCurve:
     /// `Self::ScalarField`.
     #[must_use]
     fn mul_by_cofactor_inv(&self) -> Self {
-        self.mul(Self::Parameters::COFACTOR_INV).into()
+        self.mul_bigint(&Self::Config::COFACTOR_INV.into_bigint())
+            .into()
     }
 
     /// Batched point addition.
@@ -314,22 +327,6 @@ pub trait AffineCurve:
         bases: &[Self],
         base_positions: &[u32],
     );
-}
-
-impl<C: ProjectiveCurve> crate::group::Group for C {
-    type ScalarField = C::ScalarField;
-
-    #[inline]
-    #[must_use]
-    fn double(&self) -> Self {
-        let mut tmp = *self;
-        tmp += self;
-        tmp
-    }
-
-    #[inline]
-    fn double_in_place(&mut self) -> &mut Self {
-        <C as ProjectiveCurve>::double_in_place(self)
     }
 }
 

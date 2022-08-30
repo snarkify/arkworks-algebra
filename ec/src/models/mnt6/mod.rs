@@ -1,11 +1,11 @@
 use crate::{
-    models::{ModelParameters, SWModelParameters},
+    models::{short_weierstrass::SWCurveConfig, CurveConfig},
     PairingEngine,
 };
 use ark_ff::{
     fp3::{Fp3, Fp3Config},
     fp6_2over3::{Fp6, Fp6Config},
-    BitIteratorBE, Field, PrimeField, SquareRootField,
+    CyclotomicMultSubgroup, Field, PrimeField,
 };
 use num_traits::{One, Zero};
 
@@ -25,19 +25,19 @@ pub type GT<P> = Fp6<P>;
 pub trait MNT6Parameters: 'static {
     const TWIST: Fp3<Self::Fp3Config>;
     const TWIST_COEFF_A: Fp3<Self::Fp3Config>;
-    const ATE_LOOP_COUNT: &'static [u64];
+    const ATE_LOOP_COUNT: &'static [i8];
     const ATE_IS_LOOP_COUNT_NEG: bool;
     const FINAL_EXPONENT_LAST_CHUNK_1: <Self::Fp as PrimeField>::BigInt;
     const FINAL_EXPONENT_LAST_CHUNK_W0_IS_NEG: bool;
     const FINAL_EXPONENT_LAST_CHUNK_ABS_OF_W0: <Self::Fp as PrimeField>::BigInt;
-    type Fp: PrimeField + SquareRootField + Into<<Self::Fp as PrimeField>::BigInt>;
-    type Fr: PrimeField + SquareRootField + Into<<Self::Fr as PrimeField>::BigInt>;
+    type Fp: PrimeField + Into<<Self::Fp as PrimeField>::BigInt>;
+    type Fr: PrimeField + Into<<Self::Fr as PrimeField>::BigInt>;
     type Fp3Config: Fp3Config<Fp = Self::Fp>;
     type Fp6Config: Fp6Config<Fp3Config = Self::Fp3Config>;
-    type G1Parameters: SWModelParameters<BaseField = Self::Fp, ScalarField = Self::Fr>;
-    type G2Parameters: SWModelParameters<
+    type G1Parameters: SWCurveConfig<BaseField = Self::Fp, ScalarField = Self::Fr>;
+    type G2Parameters: SWCurveConfig<
         BaseField = Fp3<Self::Fp3Config>,
-        ScalarField = <Self::G1Parameters as ModelParameters>::ScalarField,
+        ScalarField = <Self::G1Parameters as CurveConfig>::ScalarField,
     >;
 }
 
@@ -46,7 +46,7 @@ pub trait MNT6Parameters: 'static {
 pub struct MNT6<P: MNT6Parameters>(PhantomData<fn() -> P>);
 
 impl<P: MNT6Parameters> MNT6<P> {
-    fn doubling_step_for_flipped_miller_loop(
+    fn doubling_for_flipped_miller_loop(
         r: &G2ProjectiveExtended<P>,
     ) -> (G2ProjectiveExtended<P>, AteDoubleCoefficients<P>) {
         let a = r.t.square();
@@ -76,7 +76,7 @@ impl<P: MNT6Parameters> MNT6<P> {
         (r2, coeff)
     }
 
-    fn mixed_addition_step_for_flipped_miller_loop(
+    fn mixed_addition_for_flipper_miller_loop(
         x: &Fp3<P::Fp3Config>,
         y: &Fp3<P::Fp3Config>,
         r: &G2ProjectiveExtended<P>,
@@ -112,10 +112,9 @@ impl<P: MNT6Parameters> MNT6<P> {
 
         // code below gets executed for all bits (EXCEPT the MSB itself) of
         // mnt6_param_p (skipping leading zeros) in MSB to LSB order
-        for (bit, dc) in BitIteratorBE::without_leading_zeros(P::ATE_LOOP_COUNT)
-            .skip(1)
-            .zip(&q.double_coefficients)
-        {
+        let y_over_twist_neg = -q.y_over_twist;
+        assert_eq!(P::ATE_LOOP_COUNT.len() - 1, q.double_coefficients.len());
+        for (bit, dc) in P::ATE_LOOP_COUNT.iter().skip(1).zip(&q.double_coefficients) {
             let g_rr_at_p = Fp6::new(
                 dc.c_l - &dc.c_4c - &(dc.c_j * &p.x_twist),
                 dc.c_h * &p.y_twist,
@@ -123,16 +122,28 @@ impl<P: MNT6Parameters> MNT6<P> {
 
             f = f.square() * &g_rr_at_p;
 
-            if bit {
+            // Compute l_{R,Q}(P) if bit == 1, and l_{R,-Q}(P) if bit == -1
+            let g_rq_at_p = if *bit == 1 {
                 let ac = &q.addition_coefficients[add_idx];
                 add_idx += 1;
 
-                let g_rq_at_p = Fp6::new(
+                Fp6::new(
                     ac.c_rz * &p.y_twist,
                     -(q.y_over_twist * &ac.c_rz + &(l1_coeff * &ac.c_l1)),
-                );
-                f *= &g_rq_at_p;
-            }
+                )
+            } else if *bit == -1 {
+                let ac = &q.addition_coefficients[add_idx];
+                add_idx += 1;
+                Fp6::new(
+                    ac.c_rz * &p.y_twist,
+                    -(y_over_twist_neg * &ac.c_rz + &(l1_coeff * &ac.c_l1)),
+                )
+            } else if *bit == 0 {
+                continue;
+            } else {
+                unreachable!();
+            };
+            f *= &g_rq_at_p;
         }
 
         if P::ATE_IS_LOOP_COUNT_NEG {
@@ -195,7 +206,7 @@ impl<P: MNT6Parameters> MNT6<P> {
 }
 
 impl<P: MNT6Parameters> PairingEngine for MNT6<P> {
-    type Fr = <P::G1Parameters as ModelParameters>::ScalarField;
+    type Fr = <P::G1Parameters as CurveConfig>::ScalarField;
     type G1Projective = G1Projective<P>;
     type G1Affine = G1Affine<P>;
     type G1Prepared = G1Prepared<P>;

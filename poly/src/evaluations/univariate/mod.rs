@@ -1,6 +1,8 @@
 //! A univariate polynomial represented in evaluations form.
 
-use crate::{univariate::DensePolynomial, EvaluationDomain, GeneralEvaluationDomain, UVPolynomial};
+use crate::{
+    univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain,
+};
 use ark_ff::{batch_inversion, FftField};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
 use ark_std::{
@@ -75,6 +77,19 @@ impl<'a, F: FftField, D: EvaluationDomain<F>> MulAssign<&'a Evaluations<F, D>>
         ark_std::cfg_iter_mut!(self.evals)
             .zip(&other.evals)
             .for_each(|(a, b)| *a *= b);
+    }
+}
+
+impl<'a, F: FftField, D: EvaluationDomain<F>> Mul<F> for &'a Evaluations<F, D> {
+    type Output = Evaluations<F, D>;
+
+    #[inline]
+    fn mul(self, elem: F) -> Evaluations<F, D> {
+        let mut result = self.clone();
+        ark_std::cfg_iter_mut!(result.evals).for_each(|e| {
+            *e *= elem;
+        });
+        result
     }
 }
 

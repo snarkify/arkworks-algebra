@@ -1,6 +1,8 @@
+use ark_std::Zero;
+
 use super::quadratic_extension::*;
-use crate::fields::PrimeField;
-use core::marker::PhantomData;
+use crate::{fields::PrimeField, CyclotomicMultSubgroup};
+use core::{marker::PhantomData, ops::Not};
 
 /// Trait that specifies constants and methods for defining degree-two extension fields.
 pub trait Fp2Config: 'static + Send + Sync + Sized {
@@ -11,9 +13,6 @@ pub trait Fp2Config: 'static + Send + Sync + Sized {
     /// field. That is, `NONRESIDUE` is such that the quadratic polynomial
     /// `f(X) = X^2 - Self::NONRESIDUE` in Fp\[X\] is irreducible in `Self::Fp`.
     const NONRESIDUE: Self::Fp;
-
-    /// A quadratic nonresidue in Fp2, used for calculating square roots in Fp2.
-    const QUADRATIC_NONRESIDUE: Fp2<Self>;
 
     /// Coefficients for the Frobenius automorphism.
     const FROBENIUS_COEFF_FP2_C1: &'static [Self::Fp];
@@ -40,7 +39,7 @@ pub trait Fp2Config: 'static + Send + Sync + Sized {
     fn add_and_mul_fp_by_nonresidue_plus_one(x: &Self::Fp, y: &Self::Fp) -> Self::Fp {
         let mut tmp = *x;
         tmp += y;
-        Self::add_and_mul_fp_by_nonresidue(&tmp, &y)
+        Self::add_and_mul_fp_by_nonresidue(&tmp, y)
     }
 
     /// A specializable method for computing `x - mul_base_field_by_nonresidue(y)`
@@ -127,5 +126,23 @@ impl<P: Fp2Config> Fp2<P> {
     pub fn mul_assign_by_fp(&mut self, other: &P::Fp) {
         self.c0 *= other;
         self.c1 *= other;
+    }
+}
+
+impl<P: Fp2Config> CyclotomicMultSubgroup for Fp2<P> {
+    const INVERSE_IS_FAST: bool = true;
+    fn cyclotomic_inverse_in_place(&mut self) -> Option<&mut Self> {
+        // As the multiplicative subgroup is of order p^2 - 1, the
+        // only non-trivial cyclotomic subgroup is of order p+1
+        // Therefore, for any element in the cyclotomic subgroup, we have that `x^(p+1) = 1`.
+        // Recall that `x^(p+1)` in a quadratic extension field is equal
+        // to the norm in the base field, so we have that
+        // `x * x.conjugate() = 1`. By uniqueness of inverses,
+        // for this subgroup, x.inverse() = x.conjugate()
+
+        self.is_zero().not().then(|| {
+            self.conjugate();
+            self
+        })
     }
 }

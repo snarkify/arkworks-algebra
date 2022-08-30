@@ -40,7 +40,7 @@ pub trait Polynomial<F: Field>:
 }
 
 /// Describes the interface for univariate polynomials
-pub trait UVPolynomial<F: Field>: Polynomial<F, Point = F> {
+pub trait DenseUVPolynomial<F: Field>: Polynomial<F, Point = F> {
     /// Constructs a new polynomial from a list of coefficients.
     fn from_coefficients_slice(coeffs: &[F]) -> Self;
 
@@ -56,19 +56,19 @@ pub trait UVPolynomial<F: Field>: Polynomial<F, Point = F> {
 }
 
 /// Describes the interface for multivariate polynomials
-pub trait MVPolynomial<F: Field>: Polynomial<F> {
+pub trait DenseMVPolynomial<F: Field>: Polynomial<F> {
     /// The type of the terms of `self`
     type Term: multivariate::Term;
 
-    /// Constructs a new polynomial from a list of tuples of the form `(Self::Term, coeff)`
+    /// Constructs a new polynomial from a list of tuples of the form `(coeff, Self::Term)`
     fn from_coefficients_slice(num_vars: usize, terms: &[(F, Self::Term)]) -> Self {
         Self::from_coefficients_vec(num_vars, terms.to_vec())
     }
 
-    /// Constructs a new polynomial from a list of tuples of the form `(Self::Term, coeff)`
+    /// Constructs a new polynomial from a list of tuples of the form `(coeff, Self::Term)`
     fn from_coefficients_vec(num_vars: usize, terms: Vec<(F, Self::Term)>) -> Self;
 
-    /// Returns the terms of a `self` as a list of tuples of the form `(Self::Term, coeff)`
+    /// Returns the terms of a `self` as a list of tuples of the form `(coeff, Self::Term)`
     fn terms(&self) -> &[(F, Self::Term)];
 
     /// Returns the number of variables in `self`

@@ -1,7 +1,7 @@
 //! A dense univariate polynomial represented in coefficient form.
 use crate::{
     univariate::{DenseOrSparsePolynomial, SparsePolynomial},
-    EvaluationDomain, Evaluations, GeneralEvaluationDomain, Polynomial, UVPolynomial,
+    DenseUVPolynomial, EvaluationDomain, Evaluations, GeneralEvaluationDomain, Polynomial,
 };
 use ark_ff::{FftField, Field, Zero};
 use ark_serialize::*;
@@ -94,7 +94,7 @@ impl<F: Field> DensePolynomial<F> {
     }
 }
 
-impl<F: Field> UVPolynomial<F> for DensePolynomial<F> {
+impl<F: Field> DenseUVPolynomial<F> for DensePolynomial<F> {
     /// Constructs a new polynomial from a list of coefficients.
     fn from_coefficients_slice(coeffs: &[F]) -> Self {
         Self::from_coefficients_vec(coeffs.to_vec())
@@ -332,7 +332,7 @@ impl<'a, 'b, F: Field> Add<&'a SparsePolynomial<F>> for &'b DensePolynomial<F> {
     }
 }
 
-impl<'a, 'b, F: Field> AddAssign<&'a DensePolynomial<F>> for DensePolynomial<F> {
+impl<'a, F: Field> AddAssign<&'a DensePolynomial<F>> for DensePolynomial<F> {
     fn add_assign(&mut self, other: &'a DensePolynomial<F>) {
         if self.is_zero() {
             self.coeffs.truncate(0);
@@ -359,7 +359,7 @@ impl<'a, 'b, F: Field> AddAssign<&'a DensePolynomial<F>> for DensePolynomial<F> 
     }
 }
 
-impl<'a, 'b, F: Field> AddAssign<(F, &'a DensePolynomial<F>)> for DensePolynomial<F> {
+impl<'a, F: Field> AddAssign<(F, &'a DensePolynomial<F>)> for DensePolynomial<F> {
     fn add_assign(&mut self, (f, other): (F, &'a DensePolynomial<F>)) {
         if self.is_zero() {
             self.coeffs.truncate(0);
@@ -396,9 +396,7 @@ impl<'a, F: Field> AddAssign<&'a SparsePolynomial<F>> for DensePolynomial<F> {
             for (i, coeff) in other.iter() {
                 self.coeffs[*i] = *coeff;
             }
-            return;
         } else if other.is_zero() {
-            return;
         } else {
             // If `other` has higher degree than `self`, create a dense vector
             // storing the upper coefficients of the addition
@@ -496,7 +494,7 @@ impl<'a, 'b, F: Field> Sub<&'a SparsePolynomial<F>> for &'b DensePolynomial<F> {
     }
 }
 
-impl<'a, 'b, F: Field> SubAssign<&'a DensePolynomial<F>> for DensePolynomial<F> {
+impl<'a, F: Field> SubAssign<&'a DensePolynomial<F>> for DensePolynomial<F> {
     #[inline]
     fn sub_assign(&mut self, other: &'a DensePolynomial<F>) {
         if self.is_zero() {
@@ -531,9 +529,7 @@ impl<'a, F: Field> SubAssign<&'a SparsePolynomial<F>> for DensePolynomial<F> {
             for (i, coeff) in other.iter() {
                 self.coeffs[*i] = (*coeff).neg();
             }
-            return;
         } else if other.is_zero() {
-            return;
         } else {
             // If `other` has higher degree than `self`, create a dense vector
             // storing the upper coefficients of the subtraction
@@ -564,7 +560,7 @@ impl<'a, 'b, F: Field> Div<&'a DensePolynomial<F>> for &'b DensePolynomial<F> {
     }
 }
 
-impl<'a, 'b, F: Field> Mul<F> for &'b DensePolynomial<F> {
+impl<'b, F: Field> Mul<F> for &'b DensePolynomial<F> {
     type Output = DensePolynomial<F>;
 
     #[inline]

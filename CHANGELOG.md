@@ -14,9 +14,9 @@
 - [\#348](https://github.com/arkworks-rs/algebra/pull/348) (`ark-ec`) Rename `msm:{Fixed,Variable}BaseMSM:multi_scalar_mul` to `msm:{Fixed,Variable}:msm` to avoid redundancy.
 - [\#359](https://github.com/arkworks-rs/algebra/pull/359) (`ark-test-templates`) Simplify the field and curve test macros.
 - [\#365](https://github.com/arkworks-rs/algebra/pull/365) (`ark-ec`)
-    - Move `COFACTOR`, `COFACTOR_INV`, and `is_in_correct_subgroup_assuming_on_curve()` from `{SW,TE}ModelParameters` to `ModelParameters`.
+    - Move `COFACTOR`, `COFACTOR_INV`, and `is_in_correct_subgroup_assuming_on_curve()` from `{SW,TE}CurveConfig` to `CurveConfig`.
     - Add `mul_bits()` to `AffineCurve` and provide a default implementation of `mul()` using this.
-    - Remove duplicate function `scale_by_cofactor()` from `short_weierstrass_jacobian::GroupAffine` and `twisted_edwards_extended::GroupAffine`
+    - Remove duplicate function `scale_by_cofactor()` from `short_weierstrass::GroupAffine` and `twisted_edwards_extended::GroupAffine`
 - [\#370](https://github.com/arkworks-rs/algebra/pull/370) (all) Set the minimum `rust-version = 1.56` in the manifests of all crates.
 - [\#379](https://github.com/arkworks-rs/algebra/pull/379) (`ark-ff`) Refactor `Field` implementation and `PrimeField` trait:
     - Switch from hardcoded `FpXYZ` to `Fp<N>` based on `const` generics.
@@ -31,19 +31,52 @@
 - [\#386](https://github.com/arkworks-rs/algebra/pull/386) (`ark-ff`) Remove `PrimeField::GENERATOR`, since it already exists on `FftField`.
 - [\#393](https://github.com/arkworks-rs/algebra/pull/393) (`ark-ec`, `ark-ff`) Rename `FpXParams` to `FpXConfig` and `FpXParamsWrapper` to `FpXConfigWrapper`.
 - [\#396](https://github.com/arkworks-rs/algebra/pull/396) (`ark-ec`) Remove `mul_bits` feature, and remove default implementations of `mul` and `mul_by_cofactor_to_projective`.
+- [\#408](https://github.com/arkworks-rs/algebra/pull/408) (`ark-ff`) Change the output of `Display` formatting for BigInt & Fp from hex to decimal.
+- [\#412](https://github.com/arkworks-rs/algebra/pull/412) (`ark-poly`) Rename UV/MVPolynomial to DenseUV/MVPolynomial.
+- [\#417](https://github.com/arkworks-rs/algebra/pull/417) (`ark-ff`) Remove `ToBytes` and `FromBytes`.
+- [\#418](https://github.com/arkworks-rs/algebra/pull/418) (`ark-ff`) Add `sums_of_products` to `Field` and `Fp`
+- [\#422](https://github.com/arkworks-rs/algebra/pull/422) (`ark-ff`) Remove `SquareRootField`, and move functionality to `Field`
+- [\#425](https://github.com/arkworks-rs/algebra/pull/425) (`ark-ec`) Refactor `VariableBase` struct to `VariableBaseMSM` trait and implement it for `GroupProjective`.
+- [\#438](https://github.com/arkworks-rs/algebra/pull/438) (`ark-ec`) Rename modules, structs, and traits related to `ec`.
+    - `short_weierstrass_jacobian` → `short_weierstrass`
+    - `twisted_edwards_extend` → `twisted_edwards`
+    - `GroupAffine` → `Affine`
+    - `GroupProjective` → `Projective`
+    - `ModelParameters` → `CurveConfig`
+    - `SWModelParameters` → `SWCurveConfig`
+    - `TEModelParameters` → `TECurveConfig`
+    - `MontgomeryModelParameters` → `MontCurveConfig`
+- [\#440](https://github.com/arkworks-rs/algebra/pull/440) (`ark-ff`) Add a method to construct a field element from an element of the underlying base prime field.
+- [\#443](https://github.com/arkworks-rs/algebra/pull/443), [\#449](https://github.com/arkworks-rs/algebra/pull/449) (`ark-ec`) Improve ergonomics of scalar multiplication.
+    - Rename `ProjectiveCurve::mul(AsRef[u64])` to `ProjectiveCurve::mul_bigint(AsRef[u64])`.
+    - Bound `ProjectiveCurve` by
+        - `Mul<ScalarField>`,
+        - `for<'a> Mul<&'a ScalarField>`
+        - `MulAssign<ScalarField>`,
+        - `for<'a> MulAssign<&'a ScalarField>`
+    - Bound `AffineCurve` by
+        - `Mul<ScalarField, Output = ProjectiveCurve>`
+        - `for<'a> Mul<&'a ScalarField, Output = ProjectiveCurve>`
+- [\#445](https://github.com/arkworks-rs/algebra/pull/445) (`ark-ec`) Change the `ATE_LOOP_COUNT` in MNT4/6 curves to use 2-NAF.
+- [\#446](https://github.com/arkworks-rs/algebra/pull/446) (`ark-ff`) Add `CyclotomicMultSubgroup` trait and impl for extension fields
 
 ### Features
 
 - [\#301](https://github.com/arkworks-rs/algebra/pull/301) (`ark-ec`) Add `GLVParameters` trait definition.
-- [\#312](https://github.com/arkworks-rs/algebra/pull/312) (`ark-ec`) Add `is_in_correct_subgroup_assuming_on_curve` for all `SWModelParameters`.
+- [\#312](https://github.com/arkworks-rs/algebra/pull/312) (`ark-ec`) Add `is_in_correct_subgroup_assuming_on_curve` for all `Parameters`.
 - [\#321](https://github.com/arkworks-rs/algebra/pull/321) (`ark-ff`) Change bigint conversions to impl `From` instead of `Into`.
 - [\#343](https://github.com/arkworks-rs/algebra/pull/343) (`ark-ec`) Add WB and SWU hash-to-curve maps.
 - [\#348](https://github.com/arkworks-rs/algebra/pull/348) (`ark-ec`) Add `msm:{Fixed,Variable}Base:msm_checked_len`.
 - [\#364](https://github.com/arkworks-rs/algebra/pull/364) (`ark-ec`) Add `ChunkedPippenger` to variable-base MSM.
 - [\#371](https://github.com/arkworks-rs/algebra/pull/371) (`ark-serialize`) Add serialization impls for arrays
 - [\#386](https://github.com/arkworks-rs/algebra/pull/386) (`ark-ff-macros`, `ark-ff`) Add a macro to derive `MontConfig`.
-- [\#396](https://github.com/arkworks-rs/algebra/pull/396) (`ark-ec`) Add a default `mul` function to `{TE,SW}ModelParameters` trait definition.
+- [\#396](https://github.com/arkworks-rs/algebra/pull/396) (`ark-ec`) Add a default `mul` function to `{TE,SW}CurveConfig` trait definition.
 - [\#397](https://github.com/arkworks-rs/algebra/pull/397) (`ark-ec`) Add `HashMapPippenger` to variable-base MSM.
+- [\#418](https://github.com/arkworks-rs/algebra/pull/418) (`ark-ff`) Add `sums_of_products` to `Field` and `Fp`
+- [\#420](https://github.com/arkworks-rs/algebra/pull/420) (`ark-ec`) Add a `clear_cofactor` method to `AffineCurve`.
+- [\#430](https://github.com/arkworks-rs/algebra/pull/430) (`ark-ec`) Add functionality for mapping a field element to a curve element for hash-to-curve.
+- [\#440](https://github.com/arkworks-rs/algebra/pull/440) (`ark-ff`) Add a method to construct a field element from an element of the underlying base prime field.
+- [\#446](https://github.com/arkworks-rs/algebra/pull/446) (`ark-ff`) Add `CyclotomicMultSubgroup` trait and impl for extension fields
 
 ### Improvements
 
@@ -52,12 +85,16 @@
 - [\#339](https://github.com/arkworks-rs/algebra/pull/339) (`ark-ff`) Remove duplicated code from `test_field` module and replace its usage with `ark-test-curves` crate.
 - [\#352](https://github.com/arkworks-rs/algebra/pull/352) (`ark-ff`) Update `QuadExtField::sqrt` for better performance.
 - [\#357](https://github.com/arkworks-rs/algebra/pull/357) (`ark-poly`) Speedup division by vanishing polynomials for dense polynomials.
+- [\#445](https://github.com/arkworks-rs/algebra/pull/445) (`ark-ec`) Use 2-NAF for ate pairing in MNT4/6 curves.
 
 ### Bugfixes
 
 - [\#350](https://github.com/arkworks-rs/algebra/pull/350) (`ark-serialize`) Fix issues with hygiene whenever a non-standard `Result` type is in scope.
 - [\#358](https://github.com/arkworks-rs/algebra/pull/358) (`ark-ff`) Fix the bug for `QuadExtField::sqrt` when `c1 = 0 && c0.legendre.is_qnr()`
 - [\#366](https://github.com/arkworks-rs/algebra/pull/366) (`ark-ff`) Fix `norm()` for cubic extension field towers.
+- [\#394](https://github.com/arkworks-rs/algebra/pull/394) (`ark-ff`, `ark-serialize`) Remove `EmptyFlags` construction checks.
+- [\#442](https://github.com/arkworks-rs/algebra/pull/442) (`ark-ff`) Fix deserialization for modulo with 64 shaving bits.
+- [\#460](https://github.com/arkworks-rs/algebra/pull/460) (`ark-ec`) Fix a corner case for ate pairing in BLS12 and BW6 models.
 
 ## v0.3.0
 
@@ -180,7 +217,7 @@ The main features of this release are:
 - [\#207](https://github.com/arkworks-rs/algebra/pull/207) (`ark-ff`) Improve performance of extension fields when the non-residue is negative. (Improves fq2, fq12, and g2 speed on bls12 and bn curves.)
 - [\#211](https://github.com/arkworks-rs/algebra/pull/211) (`ark-ec`) Improve performance of BLS12 final exponentiation.
 - [\#214](https://github.com/arkworks-rs/algebra/pull/214) (`ark-poly`) Utilise a more efficient way of evaluating a polynomial at a single point.
-- [\#242](https://github.com/arkworks-rs/algebra/pull/242), [\#244][https://github.com/arkworks-rs/algebra/pull/244] (`ark-poly`) Speedup the sequential radix-2 FFT significantly by making the method in which it accesses roots more cache-friendly.
+- [\#242](https://github.com/arkworks-rs/algebra/pull/242), [\#244](https://github.com/arkworks-rs/algebra/pull/244) (`ark-poly`) Speedup the sequential radix-2 FFT significantly by making the method in which it accesses roots more cache-friendly.
 
 ### Bugfixes
 
