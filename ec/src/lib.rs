@@ -327,7 +327,6 @@ pub trait AffineCurve:
         bases: &[Self],
         base_positions: &[u32],
     );
-    }
 }
 
 /// Preprocesses a G1 element for use in a pairing.

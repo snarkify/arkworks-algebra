@@ -295,7 +295,7 @@ impl<P: SWCurveConfig> Affine<P> {
                 let m = ri * (q.y - p.y);
                 let x3 = m.square() - p.x - q.x;
                 let y3 = m * (p.x - x3) - p.y;
-                Self::new(x3, y3, false)
+                Self::new(x3, y3)
             })
             .collect();
         let res: Vec<_> = group1

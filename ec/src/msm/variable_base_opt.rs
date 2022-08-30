@@ -247,7 +247,7 @@ impl<C: AffineCurve> MultiExp<C> {
             // Just do a naive MSM
             let mut acc = C::Projective::zero();
             for (idx, coeff) in coeffs.iter().enumerate() {
-                acc += bases[idx].into_projective().mul(*coeff);
+                acc += bases[idx].into_projective().mul_bigint(*coeff);
             }
             //stop_measure(start);
             return acc;
