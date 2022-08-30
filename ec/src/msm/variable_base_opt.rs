@@ -795,7 +795,10 @@ fn accumulate_buckets<C: AffineCurve, const BATCH_ACC_BUCKETS: bool>(
         // QUESTION(victor): We try to avoid allocations. Does this allocation effect performance?
         let mut num_inputs = running_sums.len();
         C::Projective::batch_normalization(&mut running_sums);
-        let mut running_sum_tree = running_sums.into_iter().map(|p| p.into()).collect::<Vec<C>>();
+        let mut running_sum_tree = running_sums
+            .into_iter()
+            .map(|p| p.into())
+            .collect::<Vec<C>>();
         running_sum_tree.resize(num_inputs * 2 - 1, C::zero());
 
         // Use batch affine addition in a tree until the number of inputs is reduced to 32.
@@ -824,8 +827,14 @@ fn accumulate_buckets<C: AffineCurve, const BATCH_ACC_BUCKETS: bool>(
         }
 
         // Sum the remaining inputs using the mixed formula.
-        let remaining_inputs = &mut running_sum_tree[input_offset..input_offset+num_inputs];
-        remaining_inputs.iter().skip(1).fold(remaining_inputs[0].into_projective(), |mut a, b| { a.add_assign_mixed(b); a })
+        let remaining_inputs = &mut running_sum_tree[input_offset..input_offset + num_inputs];
+        remaining_inputs
+            .iter()
+            .skip(1)
+            .fold(remaining_inputs[0].into_projective(), |mut a, b| {
+                a.add_assign_mixed(b);
+                a
+            })
     } else {
         let mut res = C::Projective::zero();
         bucket_sizes[1..]
