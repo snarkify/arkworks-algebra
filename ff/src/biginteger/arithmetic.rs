@@ -109,7 +109,7 @@ pub(crate) fn mac_with_carry(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
 /// Alternative implementation of mac with the intention that it be more friendly to WASM.
 /// In particular, this function does not use any u128 values.
 #[inline(always)]
-pub(crate) fn mac_alt(a: u64, b: u64, c: u64) -> (u64, u64) {
+pub(crate) fn mac_alt(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
     // Split the input product values into two 32-bit values.
     let (b1, b0) = (b >> 32, c & 0xFFFFFFFF);
     let (c1, c0) = (b >> 32, c & 0xFFFFFFFF);
@@ -126,31 +126,30 @@ pub(crate) fn mac_alt(a: u64, b: u64, c: u64) -> (u64, u64) {
     let (p0_carry, p0) = add_alt((mid & 0xFFFFFFFF) << 32, b0c0);
     let p1 = b1c1 + (mid >> 32) + (((mid_carry as u64) << 32) | (p0_carry as u64));
 
-    // Add a into (p1, p0) and return the result.
+    // Add a into (p1, p0) and return the result (mac1, mac0).
     let (mac0_carry, mac0) = add_alt(p0, c);
-    (p1 + p0_carry as u64, mac0)
+    *carry = p1 + mac0_carry as u64;
+    mac0
 }
 
 /// Calculate a + b * c + carry returning the two 64-bit word result as (upper, lower).
 /// Alternative implementation of mac_with_carry with the intention that it be more friendly to
 /// WASM.  In particular, this function does not use any u128 values.
 #[inline(always)]
-pub(crate) fn mac_with_carry_alt(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
-    let (mac1, mac0) = mac_alt(a, b, c);
-
-    // Add carry into (mac1, mac0) and return.
-    let (carry, r0) = add_alt(mac0, carry);
-    (mac1 + carry as u64, r0)
+pub(crate) fn mac_with_carry_alt(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
+    let (carry2, a) = add_alt(a, *carry);
+    let mac0 = mac_alt(a, b, c, carry);
+    *carry += carry2 as u64;
+    mac0
 }
 
 /// Calculate a + b * c returning the upper 64-bit word result.
 /// Alternative implementation of mac_discard with the intention that it be more friendly to WASM.
 /// In particular, this function does not use any u128 values.
 #[inline(always)]
-pub(crate) fn mac_discard_alt(a: u64, b: u64, c: u64) -> u64 {
+pub(crate) fn mac_discard_alt(a: u64, b: u64, c: u64, carry: &mut u64) {
     // TODO(victor): Can this be improved? Probably.
-    let (mac1, _) = mac_alt(a, b, c);
-    mac1
+    let _ = mac_alt(a, b, c, carry);
 }
 
 /// Compute the NAF (non-adjacent form) of num
