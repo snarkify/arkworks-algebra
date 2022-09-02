@@ -48,6 +48,7 @@ std = [ "ark-std/std", "ark-serialize/std" ]
 parallel = [ "std", "rayon", "ark-std/parallel" ]
 asm = []
 square-no-carry = []
+no-u128 = []
 
 [[bench]]
 name = "montgomery"
