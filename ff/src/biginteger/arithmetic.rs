@@ -117,6 +117,7 @@ pub(crate) fn mac_with_carry(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
 #[cfg(feature = "no-u128")]
 pub(crate) fn mac(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
     // Split the input product values into two 32-bit values.
+    let (a1, a0) = (a >> 32, a & 0xFFFFFFFF);
     let (b1, b0) = (b >> 32, b & 0xFFFFFFFF);
     let (c1, c0) = (c >> 32, c & 0xFFFFFFFF);
 
@@ -128,13 +129,11 @@ pub(crate) fn mac(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
 
     // Sum the multiplication results into their respective 64-bit result words.
     // Results in (p1, p0), the 128-bit result of b*c.
-    let (mid_carry, mid) = add_alt(b1c0, b0c1);
-    let (p0_carry, p0) = add_alt(mid << 32, b0c0);
-    let p1 = b1c1 + (mid >> 32) + ((mid_carry as u64) << 32) + (p0_carry as u64);
+    let (mid_carry, mid) = add_alt(b1c0 + a1, b0c1);
+    let (mac0_carry, mac0) = add_alt((mid << 32) | a0, b0c0);
+    let mac1 = b1c1 + (mid >> 32) + ((mid_carry as u64) << 32) + (mac0_carry as u64);
 
-    // Add a into (p1, p0) and return the result (mac1, mac0).
-    let (mac0_carry, mac0) = add_alt(p0, a);
-    *carry = p1 + mac0_carry as u64;
+    *carry = mac1;
     mac0
 }
 
@@ -144,9 +143,25 @@ pub(crate) fn mac(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
 #[inline(always)]
 #[cfg(feature = "no-u128")]
 pub(crate) fn mac_with_carry(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
-    let (carry2, a) = add_alt(a, *carry);
-    let mac0 = mac(a, b, c, carry);
-    *carry += carry2 as u64;
+    // Split the input product values into two 32-bit values.
+    let (a1, a0) = (a >> 32, a & 0xFFFFFFFF);
+    let (b1, b0) = (b >> 32, b & 0xFFFFFFFF);
+    let (c1, c0) = (c >> 32, c & 0xFFFFFFFF);
+    let (d1, d0) = (*carry >> 32, *carry & 0xFFFFFFFF);
+
+    // Compute the 4 32-bit multiplications with 64-bit results.
+    let b0c0 = b0 * c0;
+    let b1c0 = b1 * c0;
+    let b0c1 = b0 * c1;
+    let b1c1 = b1 * c1;
+
+    // Sum the multiplication results into their respective 64-bit result words.
+    // Results in (p1, p0), the 128-bit result of b*c.
+    let (mid_carry, mid) = add_alt(b1c0 + a1, b0c1 + d1);
+    let (mac0_carry, mac0) = add_alt((mid << 32) | a0, b0c0 + d0);
+    let mac1 = b1c1 + (mid >> 32) + ((mid_carry as u64) << 32) + (mac0_carry as u64);
+
+    *carry = mac1;
     mac0
 }
 
@@ -156,7 +171,6 @@ pub(crate) fn mac_with_carry(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
 #[inline(always)]
 #[cfg(feature = "no-u128")]
 pub(crate) fn mac_discard(a: u64, b: u64, c: u64, carry: &mut u64) {
-    // TODO(victor): Can this be improved? Probably.
     let _ = mac(a, b, c, carry);
 }
 
