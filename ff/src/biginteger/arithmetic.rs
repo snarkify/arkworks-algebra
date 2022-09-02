@@ -127,11 +127,12 @@ pub(crate) fn mac(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
     let b0c1 = b0 * c1;
     let b1c1 = b1 * c1;
 
-    // Sum the multiplication results into their respective 64-bit result words.
-    // Results in (p1, p0), the 128-bit result of b*c.
+    // Sum the multiplication results into their respective 64-bit result words. Simultanously add
+    // in the input value a, which can be done without trigger extra carries.
+    // Results in (mac1, mac0), the 128-bit result of a + b*c.
     let (mid_carry, mid) = add_alt(b1c0 + a1, b0c1);
     let (mac0_carry, mac0) = add_alt((mid << 32) | a0, b0c0);
-    let mac1 = b1c1 + (mid >> 32) + ((mid_carry as u64) << 32) + (mac0_carry as u64);
+    let mac1 = b1c1 + (((mid_carry as u64) << 32) | (mid >> 32)) + (mac0_carry as u64);
 
     *carry = mac1;
     mac0
@@ -155,11 +156,12 @@ pub(crate) fn mac_with_carry(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
     let b0c1 = b0 * c1;
     let b1c1 = b1 * c1;
 
-    // Sum the multiplication results into their respective 64-bit result words.
-    // Results in (p1, p0), the 128-bit result of b*c.
+    // Sum the multiplication results into their respective 64-bit result words. Simultanously add
+    // in the input values a and carry, which can be done without trigger extra carries.
+    // Results in (mac1, mac0), the 128-bit result of a + b*c + carry.
     let (mid_carry, mid) = add_alt(b1c0 + a1, b0c1 + d1);
     let (mac0_carry, mac0) = add_alt((mid << 32) | a0, b0c0 + d0);
-    let mac1 = b1c1 + (mid >> 32) + ((mid_carry as u64) << 32) + (mac0_carry as u64);
+    let mac1 = b1c1 + (((mid_carry as u64) << 32) | (mid >> 32)) + (mac0_carry as u64);
 
     *carry = mac1;
     mac0
