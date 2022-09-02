@@ -129,9 +129,8 @@ pub(crate) fn mac(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
     // Sum the multiplication results into their respective 64-bit result words.
     // Results in (p1, p0), the 128-bit result of b*c.
     let (mid_carry, mid) = add_alt(b1c0, b0c1);
-    // TODO(victor) Drop the bitwise AND on this line?
-    let (p0_carry, p0) = add_alt((mid & 0xFFFFFFFF) << 32, b0c0);
-    let p1 = b1c1 + (mid >> 32) + (((mid_carry as u64) << 32) | (p0_carry as u64));
+    let (p0_carry, p0) = add_alt(mid << 32, b0c0);
+    let p1 = b1c1 + (mid >> 32) + ((mid_carry as u64) << 32) + (p0_carry as u64);
 
     // Add a into (p1, p0) and return the result (mac1, mac0).
     let (mac0_carry, mac0) = add_alt(p0, a);
@@ -239,6 +238,18 @@ pub fn find_relaxed_naf(num: &[u64]) -> Vec<i8> {
     }
 
     res
+}
+
+#[test]
+fn test_mac_does_not_overflow() {
+    let mut carry = u64::MAX;
+    let _ = mac(u64::MAX, u64::MAX, u64::MAX, &mut carry); 
+}
+
+#[test]
+fn test_mac_with_carry_does_not_overflow() {
+    let mut carry = u64::MAX;
+    let _ = mac_with_carry(u64::MAX, u64::MAX, u64::MAX, &mut carry); 
 }
 
 #[test]
