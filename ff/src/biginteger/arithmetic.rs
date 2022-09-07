@@ -1,11 +1,20 @@
 use ark_std::{vec, vec::Vec};
 
+macro_rules! adc {
+    ($a:expr, $b:expr, &mut $carry:expr$(,)?) => {{
+        let tmp = ($a as u128) + ($b as u128) + ($carry as u128);
+        $carry = (tmp >> 64) as u64;
+        tmp as u64
+    }};
+}
+
 /// adc with the option to accept a variable number of args.
 /// carry is given as the first arg, followed by any number of inputs.
 // NOTE(victor) Need to look at the assembly output for this since it was likely written
 // specifically to ensure the compiler implements it with a particular instruction and I may have
 // borked that.
-macro_rules! adc {
+#[cfg(feature = "square-no-carry")]
+macro_rules! adc_var {
     (&mut $carry:expr, $($x:expr),*) => {{
         let tmp = $(($x as u128) + )* ($carry as u128);
         $carry = (tmp >> 64) as u64;
@@ -232,7 +241,6 @@ pub fn find_naf(num: &[u64]) -> Vec<i8> {
 /// exception of non-adjacence for the most significant bit.
 ///
 /// Since this representation is no longer a strict NAF, we call it "relaxed NAF".
-///
 pub fn find_relaxed_naf(num: &[u64]) -> Vec<i8> {
     let mut res = find_naf(num);
 

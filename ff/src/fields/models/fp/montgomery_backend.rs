@@ -160,7 +160,6 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
     #[inline]
     #[unroll_for_loops(12)]
     fn square_in_place(a: &mut Fp<MontBackend<Self, N>, N>) {
-        //unsafe { std::arch::asm!("# begin function square in place"); }
         if N == 1 {
             // We default to multiplying with `a` using the `Mul` impl
             // for the N == 1 case
@@ -182,7 +181,6 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         {
             // Checking the modulus at compile time
             if N <= 6 && Self::CAN_USE_NO_CARRY_OPT {
-                //unsafe { std::arch::asm!("# begin asm no-carry implementation"); }
                 #[rustfmt::skip]
                 match N {
                     2 => { ark_ff_asm::x86_64_asm_square!(2, (a.0).0); },
@@ -192,7 +190,6 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                     6 => { ark_ff_asm::x86_64_asm_square!(6, (a.0).0); },
                     _ => unsafe { ark_std::hint::unreachable_unchecked() },
                 };
-                //unsafe { std::arch::asm!("# end asm no-carry implementation"); }
                 a.subtract_modulus();
                 return;
             }
@@ -223,14 +220,14 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                 // p1, p0 = p1_prev + a[i] * a[j]
                 p[p0] = fa::mac(0, (a.0).0[i], (a.0).0[i + 1], &mut p[p1]);
                 // C, r[i] = r[j] + 2*p0 + C
-                r[i + 1] = adc!(&mut carry1, r[i + 1], p[p0], p[p0]);
+                r[i + 1] = adc_var!(&mut carry1, r[i + 1], p[p0], p[p0]);
 
                 for j in i + 2..N {
                     let (p1, p0, p1_prev) = (j % 3, (j + 1) % 3, (j + 2) % 3);
                     // p1, p0 = a[i] * a[j]
                     p[p0] = fa::mac(p[p1_prev], (a.0).0[i], (a.0).0[j], &mut p[p1]);
                     // C, r[i] = r[j] + 2*p0 + 2*p1_prev
-                    r[j] = adc!(&mut carry1, r[j], p[p0], p[p0]);
+                    r[j] = adc_var!(&mut carry1, r[j], p[p0], p[p0]);
                 }
 
                 // Incremental reduction.
@@ -305,7 +302,6 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         }
         (a.0).0.copy_from_slice(&r.b1);
         a.subtract_modulus();
-        //unsafe { std::arch::asm!("# end rust square baseline implementation"); }
     }
 
     fn inverse(a: &Fp<MontBackend<Self, N>, N>) -> Option<Fp<MontBackend<Self, N>, N>> {
@@ -714,7 +710,7 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
                     lo[k] = mac_with_carry!(lo[k], tmp, T::MODULUS.0[j], &mut carry);
                 }
             });
-            hi[i] = adc!(&mut carry2, hi[i], carry);
+            hi[i] = adc!(hi[i], carry, &mut carry2);
         });
 
         crate::const_for!((i in 0..N) {

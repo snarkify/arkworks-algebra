@@ -209,7 +209,7 @@ impl<const N: usize> BigInt<N> {
         let mut carry = 0;
 
         crate::const_for!((i in 0..N) {
-            self.0[i] = adc!(&mut carry, self.0[i], other.0[i]);
+            self.0[i] = adc!(self.0[i], other.0[i], &mut carry);
         });
 
         (self, carry != 0)

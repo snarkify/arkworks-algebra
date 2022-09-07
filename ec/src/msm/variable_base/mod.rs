@@ -110,7 +110,6 @@ pub trait VariableBaseMSM:
                         scalar.divn(w_start as u32);
 
                         // We mod the remaining bits by 2^{window size}, thus taking `c` bits.
-                        // notice that c < 64
                         let scalar = scalar.as_ref()[0] % (1 << c);
 
                         // If the scalar is non-zero, we update the corresponding
@@ -121,6 +120,7 @@ pub trait VariableBaseMSM:
                         }
                     }
                 });
+
                 // Compute sum_{i in 0..num_buckets} (sum_{j in i..num_buckets} bucket[j])
                 // This is computed below for b buckets, using 2b curve additions.
                 //
@@ -138,12 +138,12 @@ pub trait VariableBaseMSM:
                 let mut running_sum = Self::zero();
                 buckets.into_iter().rev().for_each(|b| {
                     running_sum += &b;
-                    res += &running_sum; // chao: buckets[s] will be counted s
-                                         // times. thus give us s*g results.
+                    res += &running_sum;
                 });
                 res
             })
             .collect();
+
         // We store the sum for the lowest window.
         let lowest = *window_sums.first().unwrap();
 

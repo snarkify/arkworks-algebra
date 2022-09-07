@@ -6,6 +6,7 @@
     rust_2018_idioms,
     rust_2021_compatibility
 )]
+#![forbid(unsafe_code)]
 #![allow(
     clippy::op_ref,
     clippy::suspicious_op_assign_impl,
