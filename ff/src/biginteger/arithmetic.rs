@@ -43,9 +43,9 @@ pub(crate) fn adc_no_carry(a: u64, b: u64, carry: &mut u64) -> u64 {
 /// In particular, this function does not use any u128 values.
 #[inline(always)]
 #[cfg(feature = "no-u128")]
-pub(crate) fn add(a: u64, b: u64) -> (bool, u64) {
-    let tmp = a.wrapping_add(b);
-    (tmp < a, tmp)
+pub(crate) fn add(a: u64, b: u64) -> (u64, u64) {
+    let tmp = (a as u128) + (b as u128);
+    ((tmp >> 64) as u64, tmp as u64)
 }
 
 #[macro_export]
