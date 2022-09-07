@@ -49,6 +49,7 @@ parallel = [ "std", "rayon", "ark-std/parallel" ]
 asm = []
 square-no-carry = []
 no-u128 = []
+partial-reduce = []
 
 [[bench]]
 name = "montgomery"

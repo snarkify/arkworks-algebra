@@ -34,19 +34,9 @@ pub(crate) fn adc_no_carry(a: u64, b: u64, carry: &mut u64) -> u64 {
 /// In particular, this function does not use any u128 values.
 #[inline(always)]
 #[cfg(feature = "no-u128")]
-pub(crate) fn add_alt(a: u64, b: u64) -> (bool, u64) {
+pub(crate) fn add(a: u64, b: u64) -> (bool, u64) {
     let tmp = a.wrapping_add(b);
     (tmp < a, tmp)
-}
-
-/// Calculate a + b + carry with the requirement that carry be a boolean.
-/// Alternative implementation of add with the intention that it be more friendly to WASM.
-/// In particular, this function does not use any u128 values.
-#[inline(always)]
-#[cfg(feature = "no-u128")]
-pub(crate) fn add_with_carry_alt(a: u64, b: u64, carry: bool) -> (bool, u64) {
-    let tmp = a.wrapping_add(b);
-    (tmp < a, tmp + (carry as u64))
 }
 
 #[macro_export]
@@ -130,8 +120,8 @@ pub(crate) fn mac(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
     // Sum the multiplication results into their respective 64-bit result words. Simultanously add
     // in the input value a, which can be done without trigger extra carries.
     // Results in (mac1, mac0), the 128-bit result of a + b*c.
-    let (mid_carry, mid) = add_alt(b1c0 + a1, b0c1);
-    let (mac0_carry, mac0) = add_alt((mid << 32) | a0, b0c0);
+    let (mid_carry, mid) = add(b1c0 + a1, b0c1);
+    let (mac0_carry, mac0) = add((mid << 32) | a0, b0c0);
     let mac1 = b1c1 + (((mid_carry as u64) << 32) | (mid >> 32)) + (mac0_carry as u64);
 
     *carry = mac1;
@@ -159,8 +149,8 @@ pub(crate) fn mac_with_carry(a: u64, b: u64, c: u64, carry: &mut u64) -> u64 {
     // Sum the multiplication results into their respective 64-bit result words. Simultanously add
     // in the input values a and carry, which can be done without trigger extra carries.
     // Results in (mac1, mac0), the 128-bit result of a + b*c + carry.
-    let (mid_carry, mid) = add_alt(b1c0 + a1, b0c1 + d1);
-    let (mac0_carry, mac0) = add_alt((mid << 32) | a0, b0c0 + d0);
+    let (mid_carry, mid) = add(b1c0 + a1, b0c1 + d1);
+    let (mac0_carry, mac0) = add((mid << 32) | a0, b0c0 + d0);
     let mac1 = b1c1 + (((mid_carry as u64) << 32) | (mid >> 32)) + (mac0_carry as u64);
 
     *carry = mac1;
