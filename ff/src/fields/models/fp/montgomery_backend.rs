@@ -31,13 +31,40 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
     const GENERATOR: Fp<MontBackend<Self, N>, N>;
 
     /// Can we use the no-carry optimization for multiplication and squaring
-    /// outlined [here](https://hackmd.io/@zkteam/modular_multiplication)?
+    /// outlined [here](https://hackmd.io/@gnark/modular_multiplication)?
     ///
-    /// This optimization applies if
-    /// `Self::MODULUS` has (a) a non-zero MSB, and (b) at least one
-    /// zero bit in the rest of the modulus.
+    /// This optimization applies if the most significant word of
+    /// `Self::MODULUS` has (a) a zero MSB, and (b) at least one
+    /// zero bit in the rest of the word.
     #[doc(hidden)]
     const CAN_USE_NO_CARRY_OPT: bool = can_use_no_carry_optimization(&Self::MODULUS);
+
+    /// Can we use the no-carry optimization for multiplication and squaring
+    /// outlined [here](https://hackmd.io/@gnark/modular_multiplication)?
+    ///
+    /// This optimization applies if the most significant word of
+    /// `Self::MODULUS` has (a) the two MSBs are zero, and (b) at least one
+    /// zero bit in the rest of the word.
+    #[doc(hidden)]
+    const CAN_USE_SQUARE_NO_CARRY_OPT: bool = can_use_square_no_carry_optimization(&Self::MODULUS);
+
+    /// Can we use partial-reduce optimization, where the value is maintained in a partially
+    /// reduced form, in the range [0, 2*Self::MODULUS) such that reduction is not needed after a
+    /// multiplication.
+    #[doc(hidden)]
+    #[cfg(feature = "partial-reduce")]
+    const CAN_USE_PARTIAL_REDUCE_OPT: bool = can_use_partial_reduce_opt(&Self::MODULUS);
+
+    /// Defines the bound of the result of a multiplication operation, and the maximum value before
+    /// reduction is applied to the result of addition and subtraction operations.
+    /// If the partial-reduce optimization is not applied, this is Self::MODULUS. If the
+    /// partial-reduce optimization is applied, this is Self::MODULUS times two.
+    #[doc(hidden)]
+    #[cfg(feature = "partial-reduce")]
+    const REDUCTION_BOUND: BigInt<N> = match Self::CAN_USE_PARTIAL_REDUCE_OPT {
+        true => Self::MODULUS,
+        false => Self::MODULUS.const_mul2(),
+    };
 
     /// 2^s root of unity computed by GENERATOR^t
     const TWO_ADIC_ROOT_OF_UNITY: Fp<MontBackend<Self, N>, N>;
@@ -88,7 +115,11 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
     fn sub_assign(a: &mut Fp<MontBackend<Self, N>, N>, b: &Fp<MontBackend<Self, N>, N>) {
         // If `other` is larger than `self`, add the modulus to self first.
         if b.0 > a.0 {
-            a.0.add_with_carry(&Self::MODULUS);
+            #[cfg(not(feature = "partial-reduce"))]
+            { a.0.add_with_carry(&Self::MODULUS) };
+
+            #[cfg(feature = "partial-reduce")]
+            { a.0.add_with_carry(&Self::REDUCTION_BOUND) };
         }
         a.0.sub_with_borrow(&b.0);
     }
@@ -154,7 +185,13 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             // Alternative implementation
             *a = a.mul_without_reduce(b);
         }
-        a.subtract_modulus();
+        #[cfg(not(feature = "partial-reduce"))]
+        { a.subtract_modulus() };
+
+        #[cfg(feature = "partial-reduce")]
+        if !Self::CAN_USE_PARTIAL_REDUCE_OPT {
+            a.subtract_modulus();
+        }
     }
 
     #[inline]
@@ -180,7 +217,7 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         #[allow(unsafe_code, unused_mut)]
         {
             // Checking the modulus at compile time
-            if N <= 6 && Self::CAN_USE_NO_CARRY_OPT {
+            if N <= 6 && Self::CAN_USE_SQUARE_NO_CARRY_OPT {
                 #[rustfmt::skip]
                 match N {
                     2 => { ark_ff_asm::x86_64_asm_square!(2, (a.0).0); },
@@ -190,7 +227,13 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                     6 => { ark_ff_asm::x86_64_asm_square!(6, (a.0).0); },
                     _ => unsafe { ark_std::hint::unreachable_unchecked() },
                 };
-                a.subtract_modulus();
+                #[cfg(not(feature = "partial-reduce"))]
+                { a.subtract_modulus() };
+
+                #[cfg(feature = "partial-reduce")]
+                if !Self::CAN_USE_PARTIAL_REDUCE_OPT {
+                    a.subtract_modulus();
+                }
                 return;
             }
         }
@@ -201,7 +244,7 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         // R > 2N for multiplication, but R > 4N for squaring.
         // https://hackmd.io/@gnark/modular_multiplication#Montgomery-squaring
         #[cfg(feature = "square-no-carry")]
-        if Self::CAN_USE_NO_CARRY_OPT {
+        if Self::CAN_USE_SQUARE_NO_CARRY_OPT {
             //unsafe { std::arch::asm!("# begin rust no-carry implementation"); }
             let mut carry1: u64 = 0;
             let mut carry2: u64 = 0;
@@ -260,7 +303,13 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             r[N - 1] = carry1 + carry2;
 
             (a.0).0 = r;
-            a.subtract_modulus();
+            #[cfg(not(feature = "partial-reduce"))]
+            { a.subtract_modulus() };
+
+            #[cfg(feature = "partial-reduce")]
+            if !Self::CAN_USE_PARTIAL_REDUCE_OPT {
+                a.subtract_modulus();
+            }
             //unsafe { std::arch::asm!("# end rust no-carry implementation"); }
             return;
         }
@@ -301,7 +350,13 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             r.b1[i] = fa::adc(r.b1[i], carry, &mut carry2);
         }
         (a.0).0.copy_from_slice(&r.b1);
-        a.subtract_modulus();
+        #[cfg(not(feature = "partial-reduce"))]
+        { a.subtract_modulus() };
+
+        #[cfg(feature = "partial-reduce")]
+        if !Self::CAN_USE_PARTIAL_REDUCE_OPT {
+            a.subtract_modulus();
+        }
     }
 
     fn inverse(a: &Fp<MontBackend<Self, N>, N>) -> Option<Fp<MontBackend<Self, N>, N>> {
@@ -391,6 +446,10 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             r[i % N] = carry;
         }
         tmp.0 = r;
+        #[cfg(feature = "partial-reduce")]
+        if !Self::CAN_USE_PARTIAL_REDUCE_OPT && tmp >= Self::REDUCTION_BOUND {
+            tmp.sub_with_borrow(&Self::REDUCTION_BOUND);
+        }
         tmp
     }
 
@@ -454,6 +513,7 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                         result
                     });
                     let mut result = Fp::new_unchecked(result);
+                    // TODO(victor): Possibly could use the partial-reduce rule to exclude this line.
                     result.subtract_modulus();
                     debug_assert_eq!(
                         a.iter().zip(b).map(|(a, b)| *a * b).sum::<Fp<_, N>>(),
@@ -481,11 +541,42 @@ pub const fn can_use_no_carry_optimization<const N: usize>(modulus: &BigInt<N>) 
     // Checking the modulus at compile time
     let first_bit_set = modulus.0[N - 1] >> 63 != 0;
     // N can be 1, hence we can run into a case with an unused mut.
-    let mut all_bits_set = modulus.0[N - 1] == !0 - (1 << 63);
+    let mut all_bits_set = modulus.0[N - 1] == !0u64 - (1 << 63);
+    // TODO(victor): I think this is wrong, but I'll need to prove it. The gnark article says that
+    // there needs to be another zero in the most signigicant words, not just in the whole modulus.
     crate::const_for!((i in 1..N) {
         all_bits_set &= modulus.0[N - i - 1] == !0u64;
     });
     !(first_bit_set || all_bits_set)
+}
+
+#[inline]
+pub const fn can_use_square_no_carry_optimization<const N: usize>(modulus: &BigInt<N>) -> bool {
+    // Checking the modulus at compile time
+    let first_two_bit_set = modulus.0[N - 1] >> 62 != 0;
+    // N can be 1, hence we can run into a case with an unused mut.
+    let mut all_bits_set = modulus.0[N - 1] == !0u64 - (3 << 62);
+    // TODO(victor): I think this is wrong, but I'll need to prove it. The gnark article says that
+    // there needs to be another zero in the most signigicant words, not just in the whole modulus.
+    crate::const_for!((i in 1..N) {
+        all_bits_set &= modulus.0[N - i - 1] == !0u64;
+    });
+    !(first_two_bit_set || all_bits_set)
+}
+
+#[inline]
+pub const fn can_use_partial_reduce_opt<const N: usize>(modulus: &BigInt<N>) -> bool {
+    // Since the partial-reduce optimization results in larger stored values, fields with modulus
+    // close to the total bit-width of the BigInt have to choose whether to utilize partial-reduce
+    // or no-carry for multiplication and squaring. This rule prioritizes utilizing the no-carry
+    // optimization.
+    //
+    // More generally the requirement is that M > 4 * Self::MODULUS, where M is the nearest larger
+    // power of 2^64 to Self::MODULUS (i.e. The first two bits of the modulus are zero). This
+    // requirement ensure that the intermediate multiplication result of two multiplication results
+    // in the range [0, 2*Self.MODULUS) can have the Montgomery reduction applied to it correctly
+    // to get a value in the same range.
+    can_use_square_no_carry_optimization(&(*modulus).const_mul2())
 }
 
 pub const fn sqrt_precomputation<const N: usize, T: MontConfig<N>>(
@@ -557,6 +648,9 @@ impl<T: MontConfig<N>, const N: usize> FpConfig<N> for MontBackend<T, N> {
     /// `Self::MODULUS - 1`.
     const GENERATOR: Fp<Self, N> = T::GENERATOR;
 
+    #[cfg(feature = "partial-reduce")]
+    const REDUCTION_BOUND: crate::BigInt<N> = T::REDUCTION_BOUND;
+
     /// Additive identity of the field, i.e. the element `e`
     /// such that, for all elements `f` of the field, `e + f = f`.
     const ZERO: Fp<Self, N> = Fp::new_unchecked(BigInt([0u64; N]));
@@ -587,7 +681,7 @@ impl<T: MontConfig<N>, const N: usize> FpConfig<N> for MontBackend<T, N> {
     /// This modular multiplication algorithm uses Montgomery
     /// reduction for efficient implementation. It also additionally
     /// uses the "no-carry optimization" outlined
-    /// [here](https://hackmd.io/@zkteam/modular_multiplication) if
+    /// [here](https://hackmd.io/@gnark/modular_multiplication) if
     /// `P::MODULUS` has (a) a non-zero MSB, and (b) at least one
     /// zero bit in the rest of the modulus.
     #[inline]
@@ -721,10 +815,19 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
 
     const fn mul(mut self, other: &Self) -> Self {
         self = self.mul_without_reduce(other);
-        self.const_reduce()
+        #[cfg(not(feature = "partial-reduce"))]
+        { self.const_reduce() }
+
+        #[cfg(feature = "partial-reduce")]
+        if T::CAN_USE_PARTIAL_REDUCE_OPT {
+            self
+        } else {
+            self.const_reduce()
+        }
     }
 
     const fn const_is_valid(&self) -> bool {
+        #[cfg(not(feature = "partial-reduce"))]
         crate::const_for!((i in 0..N) {
             if (self.0).0[(N - i - 1)] < T::MODULUS.0[(N - i - 1)] {
                 return true
@@ -732,14 +835,31 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
                 return false
             }
         });
+
+        #[cfg(feature = "partial-reduce")]
+        crate::const_for!((i in 0..N) {
+            if (self.0).0[(N - i - 1)] < T::REDUCTION_BOUND.0[(N - i - 1)] {
+                return true
+            } else if (self.0).0[(N - i - 1)] > T::REDUCTION_BOUND.0[(N - i - 1)] {
+                return false
+            }
+        });
+
         false
     }
 
     #[inline]
     const fn const_reduce(mut self) -> Self {
+        #[cfg(not(feature = "partial-reduce"))]
         if !self.const_is_valid() {
             self.0 = Self::sub_with_borrow(&self.0, &T::MODULUS);
         }
+
+        #[cfg(feature = "partial-reduce")]
+        if !self.const_is_valid() {
+            self.0 = Self::sub_with_borrow(&self.0, &T::REDUCTION_BOUND);
+        }
+
         self
     }
 

@@ -215,7 +215,7 @@ impl<const N: usize> BigInt<N> {
         (self, carry != 0)
     }
 
-    const fn const_mul2(mut self) -> Self {
+    pub(crate) const fn const_mul2(mut self) -> Self {
         let mut last = 0;
         crate::const_for!((i in 0..N) {
             let a = self.0[i];

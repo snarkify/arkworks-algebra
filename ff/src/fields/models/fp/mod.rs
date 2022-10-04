@@ -25,6 +25,11 @@ pub trait FpConfig<const N: usize>: Send + Sync + 'static + Sized {
     /// The modulus of the field.
     const MODULUS: crate::BigInt<N>;
 
+    /// The modulus of the field.
+    // NOTE(victor): This is probably not a detail to be exposed here in a production version.
+    #[cfg(feature = "partial-reduce")]
+    const REDUCTION_BOUND: crate::BigInt<N>;
+
     /// A multiplicative generator of the field.
     /// `Self::GENERATOR` is an element having multiplicative order
     /// `Self::MODULUS - 1`.
@@ -132,11 +137,24 @@ impl<P: FpConfig<N>, const N: usize> Fp<P, N> {
     pub(crate) fn is_less_than_modulus(&self) -> bool {
         self.0 < P::MODULUS
     }
+    
+    #[cfg(feature = "partial-reduce")]
+    pub(crate) fn is_less_than_reduction_bound(&self) -> bool {
+        self.0 < P::REDUCTION_BOUND
+    }
 
     #[inline]
     fn subtract_modulus(&mut self) {
+        #[cfg(not(feature = "partial-reduce"))]
         if !self.is_less_than_modulus() {
             self.0.sub_with_borrow(&Self::MODULUS);
+        }
+
+        #[cfg(feature = "partial-reduce")]
+        if !self.is_less_than_reduction_bound() {
+            // TODO(victor): Using sub_with_borrow here _may_ introduce an unnecessary branch since
+            // this function already checks that the value is larger than the modulus.
+            self.0.sub_with_borrow(&P::REDUCTION_BOUND);
         }
     }
 
