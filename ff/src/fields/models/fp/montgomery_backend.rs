@@ -62,8 +62,8 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
     #[doc(hidden)]
     #[cfg(feature = "partial-reduce")]
     const REDUCTION_BOUND: BigInt<N> = match Self::CAN_USE_PARTIAL_REDUCE_OPT {
-        true => Self::MODULUS,
-        false => Self::MODULUS.const_mul2(),
+        true => Self::MODULUS.const_mul2(),
+        false => Self::MODULUS,
     };
 
     /// 2^s root of unity computed by GENERATOR^t
@@ -446,9 +446,10 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             r[i % N] = carry;
         }
         tmp.0 = r;
+        // TODO(victor): This reduction may not be needed.
         #[cfg(feature = "partial-reduce")]
-        if !Self::CAN_USE_PARTIAL_REDUCE_OPT && tmp >= Self::REDUCTION_BOUND {
-            tmp.sub_with_borrow(&Self::REDUCTION_BOUND);
+        if Self::CAN_USE_PARTIAL_REDUCE_OPT && tmp >= Self::MODULUS {
+            tmp.sub_with_borrow(&Self::MODULUS);
         }
         tmp
     }
@@ -477,7 +478,8 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         //   intermediate results and eventually having twice as many limbs.
 
         let modulus_size = Self::MODULUS.const_num_bits() as usize;
-        if modulus_size > 64 * N - 1 {
+        // FIXME(victor): This is currently broken
+        if true /* modulus_size > 64 * N - 1 */ {
             a.iter().zip(b).map(|(a, b)| *a * b).sum()
         } else {
             let chunk_size = 2 * (N * 64 - modulus_size) - 1;
@@ -541,7 +543,7 @@ pub const fn can_use_no_carry_optimization<const N: usize>(modulus: &BigInt<N>) 
     // Checking the modulus at compile time
     let first_bit_set = modulus.0[N - 1] >> 63 != 0;
     // N can be 1, hence we can run into a case with an unused mut.
-    let mut all_bits_set = modulus.0[N - 1] == !0u64 - (1 << 63);
+    let mut all_bits_set = modulus.0[N - 1] >= ((!0u64) >> 1);
     // TODO(victor): I think this is wrong, but I'll need to prove it. The gnark article says that
     // there needs to be another zero in the most signigicant words, not just in the whole modulus.
     crate::const_for!((i in 1..N) {
@@ -555,7 +557,7 @@ pub const fn can_use_square_no_carry_optimization<const N: usize>(modulus: &BigI
     // Checking the modulus at compile time
     let first_two_bit_set = modulus.0[N - 1] >> 62 != 0;
     // N can be 1, hence we can run into a case with an unused mut.
-    let mut all_bits_set = modulus.0[N - 1] == !0u64 - (3 << 62);
+    let mut all_bits_set = modulus.0[N - 1] >= ((!0u64) >> 2);
     // TODO(victor): I think this is wrong, but I'll need to prove it. The gnark article says that
     // there needs to be another zero in the most signigicant words, not just in the whole modulus.
     crate::const_for!((i in 1..N) {
@@ -752,7 +754,11 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
     #[doc(hidden)]
     const fn const_neg(self) -> Self {
         if !self.const_is_zero() {
-            Self::new_unchecked(Self::sub_with_borrow(&T::MODULUS, &self.0))
+            #[cfg(not(feature = "partial-reduce"))]
+            { Self::new_unchecked(Self::sub_with_borrow(&T::MODULUS, &self.0)) }
+
+            #[cfg(feature = "partial-reduce")]
+            { Self::new_unchecked(Self::sub_with_borrow(&T::REDUCTION_BOUND, &self.0)) }
         } else {
             self
         }
@@ -827,7 +833,6 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
     }
 
     const fn const_is_valid(&self) -> bool {
-        #[cfg(not(feature = "partial-reduce"))]
         crate::const_for!((i in 0..N) {
             if (self.0).0[(N - i - 1)] < T::MODULUS.0[(N - i - 1)] {
                 return true
@@ -835,8 +840,11 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
                 return false
             }
         });
+        false
+    }
 
-        #[cfg(feature = "partial-reduce")]
+    #[cfg(feature = "partial-reduce")]
+    const fn const_is_less_than_reduction_bound(&self) -> bool {
         crate::const_for!((i in 0..N) {
             if (self.0).0[(N - i - 1)] < T::REDUCTION_BOUND.0[(N - i - 1)] {
                 return true
@@ -844,7 +852,6 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
                 return false
             }
         });
-
         false
     }
 
@@ -856,7 +863,7 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
         }
 
         #[cfg(feature = "partial-reduce")]
-        if !self.const_is_valid() {
+        if !self.const_is_less_than_reduction_bound() {
             self.0 = Self::sub_with_borrow(&self.0, &T::REDUCTION_BOUND);
         }
 

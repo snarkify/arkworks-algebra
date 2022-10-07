@@ -152,8 +152,6 @@ impl<P: FpConfig<N>, const N: usize> Fp<P, N> {
 
         #[cfg(feature = "partial-reduce")]
         if !self.is_less_than_reduction_bound() {
-            // TODO(victor): Using sub_with_borrow here _may_ introduce an unnecessary branch since
-            // this function already checks that the value is larger than the modulus.
             self.0.sub_with_borrow(&P::REDUCTION_BOUND);
         }
     }
@@ -683,7 +681,12 @@ impl<P: FpConfig<N>, const N: usize> Neg for Fp<P, N> {
     #[must_use]
     fn neg(self) -> Self {
         if !self.is_zero() {
-            let mut tmp = P::MODULUS;
+            let mut tmp = {
+                #[cfg(not(feature = "partial-reduce"))]
+                { P::MODULUS }
+                #[cfg(feature = "partial-reduce")]
+                { P::REDUCTION_BOUND }
+            };
             tmp.sub_with_borrow(&self.0);
             Fp(tmp, PhantomData)
         } else {
