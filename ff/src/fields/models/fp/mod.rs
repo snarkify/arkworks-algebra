@@ -111,7 +111,7 @@ pub trait FpConfig<const N: usize>: Send + Sync + 'static + Sized {
     Default(bound = ""),
     Hash(bound = ""),
     Clone(bound = ""),
-    Copy(bound = ""),
+    Copy(bound = "")
 )]
 pub struct Fp<P, const N: usize>(
     pub BigInt<N>,
@@ -139,7 +139,7 @@ impl<P: FpConfig<N>, const N: usize> Fp<P, N> {
     pub(crate) fn is_less_than_modulus(&self) -> bool {
         self.0 < P::MODULUS
     }
-    
+
     #[cfg(feature = "partial-reduce")]
     pub(crate) fn is_less_than_reduction_bound(&self) -> bool {
         self.0 < P::REDUCTION_BOUND
@@ -390,7 +390,7 @@ impl<P: FpConfig<N>, const N: usize> PartialOrd for Fp<P, N> {
 
 impl<P: FpConfig<N>, const N: usize> PartialEq for Fp<P, N> {
     #[inline(always)]
-    #[cfg(not(feature = "partial-reduce"))] 
+    #[cfg(not(feature = "partial-reduce"))]
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
@@ -411,8 +411,8 @@ impl<P: FpConfig<N>, const N: usize> PartialEq for Fp<P, N> {
                 (false, true) => {
                     let mut carry = 0;
                     for i in 0..N {
-                        let tmp = adc!(other.0.0[i], Self::MODULUS.0[i], &mut carry);  
-                        if tmp != self.0.0[i] {
+                        let tmp = adc!(other.0 .0[i], Self::MODULUS.0[i], &mut carry);
+                        if tmp != self.0 .0[i] {
                             return false;
                         }
                     }
@@ -421,8 +421,8 @@ impl<P: FpConfig<N>, const N: usize> PartialEq for Fp<P, N> {
                 (true, false) => {
                     let mut carry = 0;
                     for i in 0..N {
-                        let tmp = adc!(self.0.0[i], Self::MODULUS.0[i], &mut carry);  
-                        if tmp != other.0.0[i] {
+                        let tmp = adc!(self.0 .0[i], Self::MODULUS.0[i], &mut carry);
+                        if tmp != other.0 .0[i] {
                             return false;
                         }
                     }
@@ -436,7 +436,7 @@ impl<P: FpConfig<N>, const N: usize> PartialEq for Fp<P, N> {
     }
 }
 
-impl<P: FpConfig<N>, const N: usize> Eq for Fp<P, N> { }
+impl<P: FpConfig<N>, const N: usize> Eq for Fp<P, N> {}
 
 impl<P: FpConfig<N>, const N: usize> From<u128> for Fp<P, N> {
     fn from(other: u128) -> Self {
@@ -735,9 +735,13 @@ impl<P: FpConfig<N>, const N: usize> Neg for Fp<P, N> {
         if !self.is_zero() {
             let mut tmp = {
                 #[cfg(not(feature = "partial-reduce"))]
-                { P::MODULUS }
+                {
+                    P::MODULUS
+                }
                 #[cfg(feature = "partial-reduce")]
-                { P::REDUCTION_BOUND }
+                {
+                    P::REDUCTION_BOUND
+                }
             };
             tmp.sub_with_borrow(&self.0);
             Fp(tmp, PhantomData)

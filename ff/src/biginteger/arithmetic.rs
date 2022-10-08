@@ -257,13 +257,13 @@ pub fn find_relaxed_naf(num: &[u64]) -> Vec<i8> {
 #[test]
 fn test_mac_does_not_overflow() {
     let mut carry = u64::MAX;
-    let _ = mac(u64::MAX, u64::MAX, u64::MAX, &mut carry); 
+    let _ = mac(u64::MAX, u64::MAX, u64::MAX, &mut carry);
 }
 
 #[test]
 fn test_mac_with_carry_does_not_overflow() {
     let mut carry = u64::MAX;
-    let _ = mac_with_carry(u64::MAX, u64::MAX, u64::MAX, &mut carry); 
+    let _ = mac_with_carry(u64::MAX, u64::MAX, u64::MAX, &mut carry);
 }
 
 #[test]

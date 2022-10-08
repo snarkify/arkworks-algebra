@@ -116,10 +116,14 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         // If `other` is larger than `self`, add the modulus to self first.
         if b.0 > a.0 {
             #[cfg(not(feature = "partial-reduce"))]
-            { a.0.add_with_carry(&Self::MODULUS) };
+            {
+                a.0.add_with_carry(&Self::MODULUS)
+            };
 
             #[cfg(feature = "partial-reduce")]
-            { a.0.add_with_carry(&Self::REDUCTION_BOUND) };
+            {
+                a.0.add_with_carry(&Self::REDUCTION_BOUND)
+            };
         }
         a.0.sub_with_borrow(&b.0);
     }
@@ -186,7 +190,9 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             *a = a.mul_without_reduce(b);
         }
         #[cfg(not(feature = "partial-reduce"))]
-        { a.subtract_modulus() };
+        {
+            a.subtract_modulus()
+        };
 
         #[cfg(feature = "partial-reduce")]
         if !Self::CAN_USE_PARTIAL_REDUCE_OPT {
@@ -228,7 +234,9 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                     _ => unsafe { ark_std::hint::unreachable_unchecked() },
                 };
                 #[cfg(not(feature = "partial-reduce"))]
-                { a.subtract_modulus() };
+                {
+                    a.subtract_modulus()
+                };
 
                 #[cfg(feature = "partial-reduce")]
                 if !Self::CAN_USE_PARTIAL_REDUCE_OPT {
@@ -304,7 +312,9 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
 
             (a.0).0 = r;
             #[cfg(not(feature = "partial-reduce"))]
-            { a.subtract_modulus() };
+            {
+                a.subtract_modulus()
+            };
 
             #[cfg(feature = "partial-reduce")]
             if !Self::CAN_USE_PARTIAL_REDUCE_OPT {
@@ -351,7 +361,9 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         }
         (a.0).0.copy_from_slice(&r.b1);
         #[cfg(not(feature = "partial-reduce"))]
-        { a.subtract_modulus() };
+        {
+            a.subtract_modulus()
+        };
 
         #[cfg(feature = "partial-reduce")]
         if !Self::CAN_USE_PARTIAL_REDUCE_OPT {
@@ -479,9 +491,13 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         // here when using the partial-reduce feature.
         let modulus_size = {
             #[cfg(not(feature = "partial-reduce"))]
-            { Self::MODULUS.const_num_bits() as usize }
+            {
+                Self::MODULUS.const_num_bits() as usize
+            }
             #[cfg(feature = "partial-reduce")]
-            { Self::REDUCTION_BOUND.const_num_bits() as usize }
+            {
+                Self::REDUCTION_BOUND.const_num_bits() as usize
+            }
         };
         if modulus_size > 64 * N - 1 {
             a.iter().zip(b).map(|(a, b)| *a * b).sum()
@@ -520,7 +536,9 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                     });
                     let mut result = Fp::new_unchecked(result);
                     #[cfg(not(feature = "partial-reduce"))]
-                    { result.subtract_modulus() };
+                    {
+                        result.subtract_modulus()
+                    };
                     #[cfg(feature = "partial-reduce")]
                     if !Self::CAN_USE_PARTIAL_REDUCE_OPT {
                         result.subtract_modulus();
@@ -767,10 +785,14 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
     const fn const_neg(self) -> Self {
         if !self.const_is_zero() {
             #[cfg(not(feature = "partial-reduce"))]
-            { Self::new_unchecked(Self::sub_with_borrow(&T::MODULUS, &self.0)) }
+            {
+                Self::new_unchecked(Self::sub_with_borrow(&T::MODULUS, &self.0))
+            }
 
             #[cfg(feature = "partial-reduce")]
-            { Self::new_unchecked(Self::sub_with_borrow(&T::REDUCTION_BOUND, &self.0)) }
+            {
+                Self::new_unchecked(Self::sub_with_borrow(&T::REDUCTION_BOUND, &self.0))
+            }
         } else {
             self
         }
@@ -834,7 +856,9 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
     const fn mul(mut self, other: &Self) -> Self {
         self = self.mul_without_reduce(other);
         #[cfg(not(feature = "partial-reduce"))]
-        { self.const_reduce() }
+        {
+            self.const_reduce()
+        }
 
         #[cfg(feature = "partial-reduce")]
         if T::CAN_USE_PARTIAL_REDUCE_OPT {
