@@ -1,5 +1,6 @@
 use core::iter;
 
+use ark_ff_macros::unroll_for_loops;
 use ark_serialize::{
     buffer_byte_size, CanonicalDeserialize, CanonicalDeserializeWithFlags, CanonicalSerialize,
     CanonicalSerializeWithFlags, EmptyFlags, Flags, SerializationError,
@@ -25,10 +26,13 @@ pub trait FpConfig<const N: usize>: Send + Sync + 'static + Sized {
     /// The modulus of the field.
     const MODULUS: crate::BigInt<N>;
 
-    /// The modulus of the field.
     // NOTE(victor): This is probably not a detail to be exposed here in a production version.
     #[cfg(feature = "partial-reduce")]
     const REDUCTION_BOUND: crate::BigInt<N>;
+
+    // NOTE(victor): This is probably not a detail to be exposed here in a production version.
+    #[cfg(feature = "partial-reduce")]
+    const CAN_USE_PARTIAL_REDUCE_OPT: bool;
 
     /// A multiplicative generator of the field.
     /// `Self::GENERATOR` is an element having multiplicative order
@@ -108,8 +112,6 @@ pub trait FpConfig<const N: usize>: Send + Sync + 'static + Sized {
     Hash(bound = ""),
     Clone(bound = ""),
     Copy(bound = ""),
-    PartialEq(bound = ""),
-    Eq(bound = "")
 )]
 pub struct Fp<P, const N: usize>(
     pub BigInt<N>,
@@ -385,6 +387,56 @@ impl<P: FpConfig<N>, const N: usize> PartialOrd for Fp<P, N> {
         Some(self.cmp(other))
     }
 }
+
+impl<P: FpConfig<N>, const N: usize> PartialEq for Fp<P, N> {
+    #[inline(always)]
+    #[cfg(not(feature = "partial-reduce"))] 
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+
+    #[inline(always)]
+    #[unroll_for_loops(12)] // TODO(victor): Will this get applied?
+    #[cfg(feature = "partial-reduce")]
+    fn eq(&self, other: &Self) -> bool {
+        if P::CAN_USE_PARTIAL_REDUCE_OPT {
+            // Partially reduced field elements can be in the range [0, 2*Self:MODULUS) giving
+            // exactly two representations for any given element.
+            //
+            // Note that this implementation imposes a cost over the fully reduced version,
+            // requiring a reduction when making an equality check instead of after each
+            // multiplication.
+            match (self.0 < Self::MODULUS, other.0 < Self::MODULUS) {
+                (false, false) => self.0 == other.0,
+                (false, true) => {
+                    let mut carry = 0;
+                    for i in 0..N {
+                        let tmp = adc!(other.0.0[i], Self::MODULUS.0[i], &mut carry);  
+                        if tmp != self.0.0[i] {
+                            return false;
+                        }
+                    }
+                    true
+                },
+                (true, false) => {
+                    let mut carry = 0;
+                    for i in 0..N {
+                        let tmp = adc!(self.0.0[i], Self::MODULUS.0[i], &mut carry);  
+                        if tmp != other.0.0[i] {
+                            return false;
+                        }
+                    }
+                    true
+                },
+                (true, true) => self.0 == other.0,
+            }
+        } else {
+            self.0 == other.0
+        }
+    }
+}
+
+impl<P: FpConfig<N>, const N: usize> Eq for Fp<P, N> { }
 
 impl<P: FpConfig<N>, const N: usize> From<u128> for Fp<P, N> {
     fn from(other: u128) -> Self {

@@ -201,7 +201,6 @@ impl<C: AffineCurve> MultiExp<C> {
         }
     }
 
-    // TODO(victor): Run benchmarks to see if setting COMPLETE=true effects performance.
     pub fn compute_msm_opt<const COMPLETE: bool, const BATCH_ACC_BUCKETS: bool>(
         bases: &[C],
         scalars: &[<C::ScalarField as PrimeField>::BigInt],
@@ -679,9 +678,6 @@ fn process_addition_tree<const PREPROCESS: bool>(round: &mut RoundData<'_>) {
 /// on each level of the tree, writing the result of the addition to a lower
 /// level. Each level thus contains independent point additions, with only
 /// requiring a single inversion per level in the tree.
-// NOTE(victor): I don't think that batch addition _only_ has to be efficient for independent
-// additions. We assume, and for random vectors it is true, that special cases occur with
-// negligible probability, but they should probably still be handled.
 fn create_addition_trees(rounds: &mut [RoundData<'_>]) {
     //let start = super::start_measure("create addition trees".to_string(), false);
     for round in rounds.iter_mut() {

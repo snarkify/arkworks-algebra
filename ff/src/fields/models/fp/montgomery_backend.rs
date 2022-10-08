@@ -446,11 +446,9 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
             r[i % N] = carry;
         }
         tmp.0 = r;
-        // TODO(victor): This reduction may not be needed.
-        #[cfg(feature = "partial-reduce")]
-        if Self::CAN_USE_PARTIAL_REDUCE_OPT && tmp >= Self::MODULUS {
-            tmp.sub_with_borrow(&Self::MODULUS);
-        }
+        // Since the input to this Montgomery reduction is less than M=2^(64*N), the output is
+        // gaurenteed to be less than Self::MODULUS.
+        debug_assert!(tmp < Self::MODULUS);
         tmp
     }
 
@@ -477,9 +475,15 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
         //   need to store a single extra limb overall, instead of keeping around all the
         //   intermediate results and eventually having twice as many limbs.
 
-        let modulus_size = Self::MODULUS.const_num_bits() as usize;
-        // FIXME(victor): This is currently broken
-        if true /* modulus_size > 64 * N - 1 */ {
+        // TODO(victor): Confirm that using REDUCTION_BOUND instead of MODULUS is the correct call
+        // here when using the partial-reduce feature.
+        let modulus_size = {
+            #[cfg(not(feature = "partial-reduce"))]
+            { Self::MODULUS.const_num_bits() as usize }
+            #[cfg(feature = "partial-reduce")]
+            { Self::REDUCTION_BOUND.const_num_bits() as usize }
+        };
+        if modulus_size > 64 * N - 1 {
             a.iter().zip(b).map(|(a, b)| *a * b).sum()
         } else {
             let chunk_size = 2 * (N * 64 - modulus_size) - 1;
@@ -515,8 +519,12 @@ pub trait MontConfig<const N: usize>: 'static + Sync + Send + Sized {
                         result
                     });
                     let mut result = Fp::new_unchecked(result);
-                    // TODO(victor): Possibly could use the partial-reduce rule to exclude this line.
-                    result.subtract_modulus();
+                    #[cfg(not(feature = "partial-reduce"))]
+                    { result.subtract_modulus() };
+                    #[cfg(feature = "partial-reduce")]
+                    if !Self::CAN_USE_PARTIAL_REDUCE_OPT {
+                        result.subtract_modulus();
+                    }
                     debug_assert_eq!(
                         a.iter().zip(b).map(|(a, b)| *a * b).sum::<Fp<_, N>>(),
                         result
@@ -650,8 +658,12 @@ impl<T: MontConfig<N>, const N: usize> FpConfig<N> for MontBackend<T, N> {
     /// `Self::MODULUS - 1`.
     const GENERATOR: Fp<Self, N> = T::GENERATOR;
 
+    // TODO(victor): Refactor to remove this field from this impl.
     #[cfg(feature = "partial-reduce")]
     const REDUCTION_BOUND: crate::BigInt<N> = T::REDUCTION_BOUND;
+
+    #[cfg(feature = "partial-reduce")]
+    const CAN_USE_PARTIAL_REDUCE_OPT: bool = T::CAN_USE_PARTIAL_REDUCE_OPT;
 
     /// Additive identity of the field, i.e. the element `e`
     /// such that, for all elements `f` of the field, `e + f = f`.
