@@ -47,6 +47,8 @@ default = []
 std = [ "ark-std/std", "ark-serialize/std" ]
 parallel = [ "std", "rayon", "ark-std/parallel" ]
 asm = []
+
+# Features used to control the use of modifications for ZPrize.
 square-no-carry = []
 no-u128 = []
 partial-reduce = []

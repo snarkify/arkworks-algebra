@@ -1,6 +1,5 @@
 use core::iter;
 
-use ark_ff_macros::unroll_for_loops;
 use ark_serialize::{
     buffer_byte_size, CanonicalDeserialize, CanonicalDeserializeWithFlags, CanonicalSerialize,
     CanonicalSerializeWithFlags, EmptyFlags, Flags, SerializationError,
@@ -397,7 +396,6 @@ impl<P: FpConfig<N>, const N: usize> PartialEq for Fp<P, N> {
     }
 
     #[cfg(feature = "partial-reduce")]
-    #[unroll_for_loops(12)]
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         if P::CAN_USE_PARTIAL_REDUCE_OPT {

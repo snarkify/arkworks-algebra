@@ -42,3 +42,6 @@ default = []
 prefetch = []
 std = [ "ark-std/std", "ark-ff/std", "ark-serialize/std" ]
 parallel = [ "std", "rayon", "ark-std/parallel"]
+
+# Features used to control the use of modifications for ZPrize.
+simplified-is-zero = []

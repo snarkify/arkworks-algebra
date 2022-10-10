@@ -341,11 +341,11 @@ impl<P: SWCurveConfig> Zero for Affine<P> {
     /// Checks if `self` is the point at infinity.
     #[inline]
     fn is_zero(&self) -> bool {
-        #[cfg(not(feature = "partial-reduce"))]
-        { self == &Self::zero() }
-
-        #[cfg(feature = "partial-reduce")]
-        { self.infinity }
+        if cfg!(feature = "simplified-is-zero") {
+            self.infinity
+        } else {
+            self == &Self::zero()
+        }
     }
 }
 
@@ -538,8 +538,10 @@ impl<P: SWCurveConfig> AffineCurve for Affine<P> {
             }
 
             // (x_2 + x_1)
+            // TOOD(victor): When using partial reduce, could avoid a modulus check/sub here.
             points[out_idx].x = points[left_idx].x + points[right_idx].x;
             // (x_2 - x_1)
+            // TOOD(victor): Could eliminate a branch here by doing BigInt right.x += MODULUS; right.x -= left.x
             points[right_idx].x -= points[left_idx].x;
             // (y2 - y1) * acc
             points[right_idx].y -= points[left_idx].y;
