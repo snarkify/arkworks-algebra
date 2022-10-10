@@ -518,15 +518,15 @@ impl<P: SWCurveConfig> AffineCurve for Affine<P> {
                         // - y_2 = s * (x - x_2) - y
 
                         // (2 * x)
-                        points[out_idx].x = points[left_idx].x + points[left_idx].x;
+                        points[out_idx].x = points[left_idx].x.double();
                         // x^2
                         let xx = points[left_idx].x.square();
                         // (2 * y)
-                        points[right_idx].x = points[left_idx].y + points[left_idx].y;
+                        points[right_idx].x = points[left_idx].y.double();
                         // (3 * x^2) * acc
-                        points[right_idx].y = (xx + xx + xx) * acc;
+                        points[right_idx].y = (xx.double() + xx) * acc;
                         // acc * (2 * y)
-                        acc = acc * points[right_idx].x;
+                        acc *= points[right_idx].x;
                         continue;
                     } else {
                         // Zero
@@ -542,7 +542,8 @@ impl<P: SWCurveConfig> AffineCurve for Affine<P> {
             // (x_2 - x_1)
             points[right_idx].x -= points[left_idx].x;
             // (y2 - y1) * acc
-            points[right_idx].y = (points[right_idx].y - points[left_idx].y) * acc;
+            points[right_idx].y -= points[left_idx].y;
+            points[right_idx].y *= acc;
             // acc * (x_2 - x_1)
             acc *= points[right_idx].x;
         }
@@ -589,7 +590,8 @@ impl<P: SWCurveConfig> AffineCurve for Affine<P> {
             // acc * (x_2 - x_1)
             acc *= points[right_idx].x;
             // x_3 = lambda^2 - (x_2 + x_1)
-            points[out_idx].x = points[right_idx].y.square() - points[out_idx].x;
+            points[out_idx].x.neg();
+            points[out_idx].x += points[right_idx].y.square();
             // y_3 = lambda * (x_1 - x_3) - y_1
             points[out_idx].y =
                 points[right_idx].y * (points[left_idx].x - points[out_idx].x) - points[left_idx].y;
