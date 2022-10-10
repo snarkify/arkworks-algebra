@@ -388,16 +388,17 @@ impl<P: FpConfig<N>, const N: usize> PartialOrd for Fp<P, N> {
     }
 }
 
+impl<P: FpConfig<N>, const N: usize> Eq for Fp<P, N> {}
 impl<P: FpConfig<N>, const N: usize> PartialEq for Fp<P, N> {
-    #[inline(always)]
     #[cfg(not(feature = "partial-reduce"))]
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
 
-    #[inline(always)]
-    #[unroll_for_loops(12)] // TODO(victor): Will this get applied?
     #[cfg(feature = "partial-reduce")]
+    #[unroll_for_loops(12)]
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         if P::CAN_USE_PARTIAL_REDUCE_OPT {
             // Partially reduced field elements can be in the range [0, 2*Self:MODULUS) giving
@@ -435,8 +436,6 @@ impl<P: FpConfig<N>, const N: usize> PartialEq for Fp<P, N> {
         }
     }
 }
-
-impl<P: FpConfig<N>, const N: usize> Eq for Fp<P, N> {}
 
 impl<P: FpConfig<N>, const N: usize> From<u128> for Fp<P, N> {
     fn from(other: u128) -> Self {

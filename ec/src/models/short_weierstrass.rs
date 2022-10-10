@@ -341,7 +341,11 @@ impl<P: SWCurveConfig> Zero for Affine<P> {
     /// Checks if `self` is the point at infinity.
     #[inline]
     fn is_zero(&self) -> bool {
-        self == &Self::zero()
+        #[cfg(not(feature = "partial-reduce"))]
+        { self == &Self::zero() }
+
+        #[cfg(feature = "partial-reduce")]
+        { self.infinity }
     }
 }
 
