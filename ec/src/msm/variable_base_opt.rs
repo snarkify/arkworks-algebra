@@ -211,22 +211,23 @@ impl<C: AffineCurve> MultiExp<C> {
     pub fn compute_msm_opt<const COMPLETE: bool, const BATCH_ACC_BUCKETS: bool>(
         bases: &[C],
         scalars: &[<C::ScalarField as PrimeField>::BigInt],
+        c: Option<usize>,
     ) -> C::Projective {
         let size = ark_std::cmp::min(bases.len(), scalars.len());
         let scalars = &scalars[..size];
         let bases = &bases[..size];
         let msm = MultiExp::new(bases);
         let mut ctx = MultiExpContext::default();
-        let res = msm.evaluate::<COMPLETE, BATCH_ACC_BUCKETS>(&mut ctx, scalars);
-        res
+        msm.evaluate::<COMPLETE, BATCH_ACC_BUCKETS>(&mut ctx, scalars, c)
     }
 
     pub fn evaluate<const COMPLETE: bool, const BATCH_ACC_BUCKETS: bool>(
         &self,
         ctx: &mut MultiExpContext<C>,
         coeffs: &[<C::ScalarField as PrimeField>::BigInt],
+        c: Option<usize>,
     ) -> <C as AffineCurve>::Projective {
-        self.evaluate_with::<COMPLETE, BATCH_ACC_BUCKETS>(ctx, coeffs, get_best_c(coeffs.len()))
+        self.evaluate_with::<COMPLETE, BATCH_ACC_BUCKETS>(ctx, coeffs, c.unwrap_or(get_best_c(coeffs.len())))
     }
 
     /// Performs a multi-exponentiation operation with the given bucket width.
