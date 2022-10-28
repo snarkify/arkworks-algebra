@@ -868,6 +868,7 @@ impl<T: MontConfig<N>, const N: usize> Fp<MontBackend<T, N>, N> {
         }
     }
 
+    #[cfg(not(feature = "partial-reduce"))]
     const fn const_is_valid(&self) -> bool {
         crate::const_for!((i in 0..N) {
             if (self.0).0[(N - i - 1)] < T::MODULUS.0[(N - i - 1)] {
