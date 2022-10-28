@@ -101,20 +101,27 @@ fn get_wnaf<C: AffineCurve>(
 }
 
 /// Returns the best bucket width for the given number of points.
-// TODO(victor): Examine these bucket sizings to determine if they really are best.
+// Note: Tuned by running MSM compiled to WASM in Google Chrome on a Linux Laptop with an 11th
+// generation Intel i7 processor.
 fn get_best_c(num_points: usize) -> usize {
-    if num_points >= 262144 {
-        15
-    } else if num_points >= 65536 {
-        12
-    } else if num_points >= 16384 {
-        11
-    } else if num_points >= 8192 {
-        10
-    } else if num_points >= 1024 {
-        9
+    if num_points >= 1 << 20 {
+        16 // [2^20, inf)
+    } else if num_points >= 1 << 18 {
+        14 // [2^18, 2^20)
+    } else if num_points >= 1 << 16 {
+        12 // [2^16, 2^18)
+    } else if num_points >= 1 << 14 {
+        10 // [2^14, 2^16)
+    } else if num_points >= 1 << 13 {
+        9 // [2^13, 2^14)
+    } else if num_points >= 1 << 12 {
+        8 // [2^12, 2^13)
+    } else if num_points >= 1 << 11 {
+        7 // [2^11, 2^12)
+    } else if num_points >= 1 << 10 {
+        6 // [2^10, 2^11)
     } else {
-        7
+        5 // [0, 2^10)
     }
 }
 
